@@ -1,0 +1,85 @@
+/* Importaciones de Tailwind */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Paleta de colores mejorada con OKLCH para una mejor consistencia de color */
+@layer base {
+  :root {
+    /* Tema Claro */
+    --background: oklch(0.98 0.01 240);
+    --foreground: oklch(0.15 0.02 240);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.15 0.02 240);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.15 0.02 240);
+    --primary: oklch(0.55 0.2 260);
+    --primary-foreground: oklch(0.98 0.01 260);
+    --secondary: oklch(0.94 0.02 240);
+    --secondary-foreground: oklch(0.25 0.02 240);
+    --muted: oklch(0.90 0.02 240);
+    --muted-foreground: oklch(0.45 0.02 240);
+    --accent: oklch(0.90 0.02 240);
+    --accent-foreground: oklch(0.25 0.02 240);
+    --destructive: oklch(0.6 0.22 20);
+    --destructive-foreground: oklch(0.98 0.01 20);
+    --border: oklch(0.88 0.02 240);
+    --input: oklch(0.96 0.01 240);
+    --ring: oklch(0.6 0.2 260);
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    /* Tema Oscuro */
+    --background: oklch(0.12 0.02 240);
+    --foreground: oklch(0.95 0.01 240);
+    --card: oklch(0.15 0.02 240);
+    --card-foreground: oklch(0.95 0.01 240);
+    --popover: oklch(0.15 0.02 240);
+    --popover-foreground: oklch(0.95 0.01 240);
+    --primary: oklch(0.65 0.22 265);
+    --primary-foreground: oklch(0.1 0.02 265);
+    --secondary: oklch(0.20 0.02 240);
+    --secondary-foreground: oklch(0.95 0.01 240);
+    --muted: oklch(0.25 0.02 240);
+    --muted-foreground: oklch(0.6 0.01 240);
+    --accent: oklch(0.25 0.02 240);
+    --accent-foreground: oklch(0.95 0.01 240);
+    --destructive: oklch(0.65 0.2 25);
+    --destructive-foreground: oklch(0.1 0.01 25);
+    --border: oklch(0.3 0.02 240);
+    --input: oklch(0.18 0.02 240);
+    --ring: oklch(0.65 0.22 265);
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+  }
+}
+
+/* Animación para el mensaje de error */
+@keyframes shake {
+  10%, 90% {
+    transform: translate3d(-1px, 0, 0);
+  }
+  20%, 80% {
+    transform: translate3d(2px, 0, 0);
+  }
+  30%, 50%, 70% {
+    transform: translate3d(-4px, 0, 0);
+  }
+  40%, 60% {
+    transform: translate3d(4px, 0, 0);
+  }
+}
+
+.animate-shake {
+  animation: shake 0.82s cubic-bezier(.36,.07,.19,.97) both;
+}
