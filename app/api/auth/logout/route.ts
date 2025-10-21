@@ -8,25 +8,22 @@ export async function POST(request: NextRequest) {
   try {
     const sessionCookie = cookies().get("session")?.value;
     if (!sessionCookie) {
+      // Asegúrate de eliminar la cookie si existe
+      cookies().delete("session");
       return NextResponse.json({ status: "success", message: "No session found." });
     }
 
     const decodedToken = await admin.auth().verifySessionCookie(sessionCookie);
     await admin.auth().revokeRefreshTokens(decodedToken.uid);
 
-    cookies().set("session", "", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 0, // Expira inmediatamente
-      path: '/',
-    });
+    cookies().delete("session"); // Elimina la cookie correctamente
 
     return NextResponse.json({ status: "success" });
 
   } catch (error) {
     console.error("Session logout error:", error);
-    cookies().set("session", "", { maxAge: 0, path: '/' });
-    
+    cookies().delete("session"); // Elimina la cookie también si hubo error
+
     return NextResponse.json(
       { error: "Failed to log out." },
       { status: 500 }

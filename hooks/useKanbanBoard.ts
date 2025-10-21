@@ -1,136 +1,235 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { DropResult } from 'react-beautiful-dnd';
-// Se corrige el nombre del servicio según lo indicado.
-import { getProjectTasks, updateTaskStatus, getTeamMembersForFilter } from '@/services/kanbanService'; 
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-import type { TaskWithDetails, User, Tag } from '@/types';
-// Se corrige la ruta del contexto según lo indicado.
-import { useAuth } from '@/context/AuthContext'; 
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import type { DropResult } from "react-beautiful-dnd";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
-type TaskStatus = 'todo' | 'in-progress' | 'done';
+// Servicios (asegúrate de que estas funciones devuelvan los datos enriquecidos)
+import {
+  getProjectTasks,
+  updateTaskStatus,
+  getTeamMembersForFilter,
+} from "@/services/kanbanService";
+
+import type { TaskWithDetails, User, Tag } from "@/types";
+import { useAuth } from "@/context/AuthContext";
+
+type TaskStatus = "todo" | "in-progress" | "done";
+
+type ColumnsMap = Record<
+  TaskStatus,
+  {
+    id: TaskStatus;
+    title: string;
+    tasks: TaskWithDetails[];
+  }
+>;
+
+const COLUMN_TITLES: Record<TaskStatus, string> = {
+  todo: "To Do",
+  "in-progress": "In Progress",
+  done: "Done",
+};
+
+const sortByDueDateThenTitle = (a: TaskWithDetails, b: TaskWithDetails) => {
+  const ad = toDateSafe(a.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY;
+  const bd = toDateSafe(b.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY;
+  if (ad !== bd) return ad - bd;
+  return a.title.localeCompare(b.title);
+};
+
+// Fecha robusta (Date | Timestamp | string | number | {seconds,nanoseconds})
+function toDateSafe(value: any): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  if (typeof value?.toDate === "function") {
+    try {
+      const d = value.toDate();
+      return isNaN(d.getTime()) ? null : d;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === "object" && "seconds" in value) {
+    const s = Number(value.seconds);
+    const n = Number(value.nanoseconds ?? 0);
+    const d = new Date(s * 1000 + Math.floor(n / 1e6));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
 
 export const useKanbanBoard = (projectId: string, teamId: string) => {
   const { user } = useAuth();
+
+  // Estado base
   const [tasks, setTasks] = useState<TaskWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  // Datos para los filtros
+
+  // Filtros
   const [teamMembers, setTeamMembers] = useState<User[]>([]);
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
-  
-  // Estados para filtros y búsqueda
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
   const [assignedUserFilter, setAssignedUserFilter] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
 
+  // Para evitar condiciones de carrera al refrescar rápidamente
+  const fetchIdRef = useRef(0);
+
   const fetchData = useCallback(async () => {
     if (!projectId || !teamId) {
-      console.warn("[useKanbanBoard] ProjectId o TeamId no proporcionados. Abortando fetch.");
+      // Si faltan IDs, limpiamos y salimos sin marcar error
+      setTasks([]);
+      setTeamMembers([]);
+      setAvailableTags([]);
+      setIsLoading(false);
       return;
     }
+
+    const currentFetchId = ++fetchIdRef.current;
     setIsLoading(true);
-    console.log(`[useKanbanBoard] Iniciando fetch para projectId: ${projectId}, teamId: ${teamId}`);
+    setError(null);
+
     try {
-      // Cargar en paralelo tareas, miembros y etiquetas
-      const [projectTasks, members, tags] = await Promise.all([
+      const [projectTasks, members, tagsSnapshot] = await Promise.all([
         getProjectTasks(projectId, teamId),
         getTeamMembersForFilter(teamId),
-        getDocs(query(collection(db, 'tags'), where('teamId', '==', teamId)))
+        getDocs(query(collection(db, "tags"), where("teamId", "==", teamId))),
       ]);
-      
-      // --- LOGS DE DEPURACIÓN ---
-      console.log('[useKanbanBoard] Datos crudos de getProjectTasks:', projectTasks);
-      console.log('[useKanbanBoard] Miembros del equipo para filtro:', members);
-      const allTags = tags.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tag));
-      console.log('[useKanbanBoard] Etiquetas disponibles para filtro:', allTags);
 
-      // Verificación clave: Revisa la consola del navegador para estos logs.
-      // Si en `projectTasks`, las tareas no tienen los objetos `assignedTo` o `tags`,
-      // el problema está en el servicio `kanbanService.ts` (en la función getProjectTasks).
-      projectTasks.forEach(task => {
-        if (!task.assignedTo && task.assignedToId) {
-          console.warn(`[useKanbanBoard] Tarea ${task.id} tiene assignedToId (${task.assignedToId}) pero no se encontró el objeto de usuario.`);
+      if (currentFetchId !== fetchIdRef.current) return; // respuesta obsoleta
+
+      const allTags: Tag[] = tagsSnapshot.docs.map(
+        (doc) =>
+          ({
+            id: doc.id,
+            ...(doc.data() as Omit<Tag, "id">),
+          } as Tag)
+      );
+
+      // Logs de depuración (opcional)
+      // console.debug("[useKanbanBoard] projectTasks:", projectTasks);
+      // console.debug("[useKanbanBoard] members:", members);
+      // console.debug("[useKanbanBoard] tags:", allTags);
+
+      // Validación ligera sobre assignedTo / tags
+      for (const t of projectTasks) {
+        if (!t.assignedTo && (t as any).assignedToId) {
+          console.warn(
+            `[useKanbanBoard] Tarea ${t.id} tiene assignedToId pero falta el objeto assignedTo.`
+          );
         }
-      });
-      // --- FIN DE LOGS DE DEPURACIÓN ---
-      
+        if (!Array.isArray(t.tags)) {
+          (t as any).tags = [];
+        }
+      }
+
       setTasks(projectTasks);
       setTeamMembers(members);
       setAvailableTags(allTags);
-
     } catch (err) {
-      setError('Failed to fetch project data.');
       console.error("[useKanbanBoard] Error durante el fetch:", err);
+      setError("Failed to fetch project data.");
     } finally {
-      setIsLoading(false);
+      if (currentFetchId === fetchIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [projectId, teamId]);
 
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchData]);
 
   const filteredTasks = useMemo(() => {
-    return tasks.filter(task => {
-      const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesUser = assignedUserFilter.length === 0 || (task.assignedToId && assignedUserFilter.includes(task.assignedToId));
-      const matchesTags = tagFilter.length === 0 || task.tags.some(tag => tagFilter.includes(tag.id));
+    const q = searchQuery.trim().toLowerCase();
+    const hasUserFilter = assignedUserFilter.length > 0;
+    const hasTagFilter = tagFilter.length > 0;
+
+    return tasks.filter((task) => {
+      const title = (task.title || "").toLowerCase();
+      const matchesSearch = q ? title.includes(q) : true;
+
+      const userId = (task as any).assignedToId || task.assignedTo?.uid || "";
+      const matchesUser = hasUserFilter ? assignedUserFilter.includes(userId) : true;
+
+      const taskTags = Array.isArray(task.tags) ? task.tags : [];
+      const matchesTags = hasTagFilter
+        ? taskTags.some((t) => tagFilter.includes(t.id))
+        : true;
+
       return matchesSearch && matchesUser && matchesTags;
     });
   }, [tasks, searchQuery, assignedUserFilter, tagFilter]);
-  
-  const columns = useMemo(() => {
-    const allColumns: Record<TaskStatus, { id: TaskStatus; title: string; tasks: TaskWithDetails[] }> = {
-      todo: { id: 'todo', title: 'To Do', tasks: [] },
-      'in-progress': { id: 'in-progress', title: 'In Progress', tasks: [] },
-      done: { id: 'done', title: 'Done', tasks: [] },
+
+  const columns = useMemo<ColumnsMap>(() => {
+    const base: ColumnsMap = {
+      todo: { id: "todo", title: COLUMN_TITLES.todo, tasks: [] },
+      "in-progress": { id: "in-progress", title: COLUMN_TITLES["in-progress"], tasks: [] },
+      done: { id: "done", title: COLUMN_TITLES.done, tasks: [] },
     };
 
-    filteredTasks.forEach(task => {
-      if (allColumns[task.status]) {
-        allColumns[task.status].tasks.push(task);
-      }
-    });
-
-    return allColumns;
-  }, [filteredTasks]);
-
-  const handleDragEnd = (result: DropResult) => {
-    const { destination, source, draggableId } = result;
-    if (!destination || !user) return;
-    
-    if (destination.droppableId === source.droppableId && destination.index === source.index) {
-      return;
+    for (const t of filteredTasks) {
+      if (base[t.status]) base[t.status].tasks.push(t);
     }
 
-    const newStatus = destination.droppableId as TaskStatus;
-    
-    console.log(`[useKanbanBoard] Moviendo tarea ${draggableId} a la columna ${newStatus}`);
-    
-    // Optimistic UI Update
-    setTasks(prevTasks =>
-      prevTasks.map(task =>
-        task.id === draggableId ? { ...task, status: newStatus } : task
-      )
-    );
-    
-    updateTaskStatus(draggableId, newStatus, user.uid, teamId)
-      .catch(err => {
+    // Ordena cada columna por fecha de vencimiento y luego título
+    base.todo.tasks.sort(sortByDueDateThenTitle);
+    base["in-progress"].tasks.sort(sortByDueDateThenTitle);
+    base.done.tasks.sort(sortByDueDateThenTitle);
+
+    return base;
+  }, [filteredTasks]);
+
+  const handleDragEnd = useCallback(
+    (result: DropResult) => {
+      const { destination, source, draggableId } = result;
+      if (!destination || !user) return;
+
+      const from = source.droppableId as TaskStatus;
+      const to = destination.droppableId as TaskStatus;
+
+      if (from === to && destination.index === source.index) return;
+      if (from === to) return; // mismo estado, nada que hacer
+
+      // Optimistic UI
+      setTasks((prev) =>
+        prev.map((t) => (t.id === draggableId ? { ...t, status: to } : t))
+      );
+
+      updateTaskStatus(draggableId, to, user.uid, teamId).catch((err) => {
         console.error("[useKanbanBoard] Error al actualizar estado de la tarea:", err);
         setError("Failed to update task. Please try again.");
-        fetchData(); // Re-fetch para revertir
+        // Revertir UI
+        setTasks((prev) =>
+          prev.map((t) => (t.id === draggableId ? { ...t, status: from } : t))
+        );
       });
-  };
+    },
+    [teamId, user]
+  );
+
+  const clearFilters = useCallback(() => {
+    setSearchQuery("");
+    setAssignedUserFilter([]);
+    setTagFilter([]);
+  }, []);
 
   return {
+    // tablero
     columns,
     isLoading,
     error,
+
+    // acciones
     handleDragEnd,
+    refreshTasks: fetchData,
+
+    // filtros
     teamMembers,
     availableTags,
     searchQuery,
@@ -139,6 +238,6 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
     setAssignedUserFilter,
     tagFilter,
     setTagFilter,
-    refreshTasks: fetchData,
+    clearFilters,
   };
 };

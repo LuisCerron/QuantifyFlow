@@ -10,8 +10,8 @@ import { AuthProvider } from "@/context/AuthContext"
 import { ProvidersContainer } from "@/components/ProvidersContainer"
 
 export const metadata: Metadata = {
-  title: "Project Management",
-  description: "Multi-team project management application",
+  title: "QuantifyFlow",
+  description: "Aplicación de gestión de proyectos para múltiples equipos",
 }
 
 export default function RootLayout({
@@ -25,25 +25,23 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${GeistSans.variable} ${GeistMono.variable}`}
     >
+      <head>
+        {/* Favicon personalizado */}
+        <link rel="icon" type="image/jpeg" href="/icon-quantify.jpg" />
+        {/* Puedes agregar otras opciones si quieres mayor compatibilidad */}
+        {/* <link rel="icon" href="/favicon.ico" sizes="any" /> */}
+        {/* <link rel="manifest" href="/site.webmanifest" /> */}
+      </head>
       <body className={`font-sans antialiased`}>
         <NextThemesProvider
           attribute="class"
           defaultTheme="system"
           enableSystem
         >
-          {/* 👇 Renderizamos 'children' directamente para aislar el problema */}
-          <AuthProvider><ProvidersContainer>{children}</ProvidersContainer></AuthProvider>
-          
-
-          {/* // --- CÓDIGO COMENTADO PARA DEPURACIÓN ---
           <AuthProvider>
-            <ProvidersContainer>
-              {children}
-            </ProvidersContainer>
+            <ProvidersContainer>{children}</ProvidersContainer>
           </AuthProvider>
-          */}
         </NextThemesProvider>
-        
         <Analytics />
       </body>
     </html>

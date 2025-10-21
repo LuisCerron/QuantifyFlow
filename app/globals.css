@@ -83,3 +83,17 @@
 .animate-shake {
   animation: shake 0.82s cubic-bezier(.36,.07,.19,.97) both;
 }
+
+
+:root, html, body {
+  height: 100%;
+}
+body {
+  overflow: hidden; /* importante: desactiva scroll global */
+}
+
+/* Opcional: mejora del suavizado de fuentes */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
