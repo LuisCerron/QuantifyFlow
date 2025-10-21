@@ -1,19 +1,7 @@
-"use client";
+'use client';
 
-import React, { useEffect, useMemo, useState } from "react";
-import { User, Tag } from "@/types";
-import { Search, Plus, User as UserIcon, Tag as TagIcon, X } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { User, Tag } from '@/types';
+import { Search, Plus } from 'lucide-react';
 
 interface ProjectHeaderProps {
   projectName: string;
@@ -40,280 +28,77 @@ export default function ProjectHeader({
   onTagFilterChange,
   onNewTaskClick,
 }: ProjectHeaderProps) {
-  const [localQuery, setLocalQuery] = useState(searchQuery);
-  useEffect(() => setLocalQuery(searchQuery), [searchQuery]);
-  useEffect(() => {
-    const id = setTimeout(() => onSearchChange(localQuery), 250);
-    return () => clearTimeout(id);
-  }, [localQuery, onSearchChange]);
-
-  const selectedUserObjs = useMemo(
-    () => teamMembers.filter((u) => selectedUsers.includes(u.uid)),
-    [teamMembers, selectedUsers]
-  );
-  const selectedTagObjs = useMemo(
-    () => availableTags.filter((t) => selectedTags.includes(t.id)),
-    [availableTags, selectedTags]
-  );
-
-  const toggleUser = (uid: string) => {
-    if (selectedUsers.includes(uid)) onUserFilterChange(selectedUsers.filter((id) => id !== uid));
-    else onUserFilterChange([...selectedUsers, uid]);
-  };
-  const toggleTag = (id: string) => {
-    if (selectedTags.includes(id)) onTagFilterChange(selectedTags.filter((t) => t !== id));
-    else onTagFilterChange([...selectedTags, id]);
+  // Manejadores para los selectores múltiples
+  const handleUserSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const options = Array.from(e.target.selectedOptions, option => option.value);
+    onUserFilterChange(options);
   };
 
-  const initials = (name?: string | null) =>
-    (name || "")
-      .trim()
-      .split(" ")
-      .map((p) => p[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase() || "?";
-
-  // Panel base opaco para todos los popovers
-  const popoverPanel =
-    "w-[min(90vw,360px)] p-0 rounded-2xl shadow-xl " +
-    "border border-neutral-200/90 dark:border-white/10 " +
-    "ring-1 ring-neutral-200/90 dark:ring-white/10 " +
-    "bg-white dark:bg-neutral-900 text-foreground";
+  const handleTagSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const options = Array.from(e.target.selectedOptions, option => option.value);
+    onTagFilterChange(options);
+  };
 
   return (
-    <div className="w-full">
-      <div className="flex flex-col items-start justify-between gap-3 md:flex-row md:items-center">
-        <h1 className="text-2xl font-extrabold tracking-tight">
-          <span className="bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 bg-clip-text text-transparent">
-            {projectName}
-          </span>
-        </h1>
-
+    <div className="mb-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <h1 className="text-3xl font-bold text-gray-800 dark:text-white">{projectName}</h1>
         <button
           onClick={onNewTaskClick}
-          className="relative inline-flex h-11 items-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 px-4 font-semibold text-white shadow-md transition-all hover:from-indigo-400 hover:via-violet-500 hover:to-fuchsia-400 active:scale-[0.99]"
+          className="flex items-center gap-2 bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors"
         >
-          <Plus size={18} />
-          Añadir tarea
+          <Plus size={20} />
+          Añadir Tarea
         </button>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-        {/* Buscador */}
-        <div className="relative">
-          <label htmlFor="task-search" className="sr-only">
-            Buscar tarea por título
-          </label>
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+      <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Search Bar */}
+        <div className="relative md:col-span-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
           <input
-            id="task-search"
             type="text"
             placeholder="Buscar tarea por título..."
-            value={localQuery}
-            onChange={(e) => setLocalQuery(e.target.value)}
-            className="h-11 w-full rounded-2xl bg-transparent pl-9 pr-3 text-sm outline-none transition
-                       ring-2 ring-neutral-300/90 dark:ring-white/20
-                       hover:ring-violet-500/50 dark:hover:ring-violet-400/60
-                       focus-visible:ring-violet-500/70 dark:focus-visible:ring-violet-400/70"
-            aria-label="Buscar tarea"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
           />
         </div>
 
-        {/* Usuarios */}
-        <div className="min-w-0">
-          <label className="sr-only">Filtrar por usuario</label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                className="flex h-11 w-full items-center justify-between gap-2 rounded-2xl bg-transparent px-3 text-left text-sm outline-none transition
-                           ring-2 ring-neutral-300/90 dark:ring-white/20
-                           hover:ring-violet-500/50 dark:hover:ring-violet-400/60
-                           focus-visible:ring-violet-500/70 dark:focus-visible:ring-violet-400/70"
-                aria-label="Filtrar por usuario"
-              >
-                <span className="inline-flex items-center gap-2 truncate">
-                  <UserIcon className="h-4 w-4 text-muted-foreground" />
-                  {selectedUserObjs.length > 0 ? (
-                    <span className="truncate">{selectedUserObjs.length} seleccionado(s)</span>
-                  ) : (
-                    <span className="text-muted-foreground">Filtrar por usuario...</span>
-                  )}
-                </span>
-                <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs ring-1 ring-neutral-300/70 dark:ring-white/10">
-                  {selectedUserObjs.length}
-                </span>
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className={popoverPanel}>
-              <Command className="bg-transparent">
-                
-                <CommandEmpty>Sin resultados.</CommandEmpty>
-                <CommandList>
-                  <ScrollArea className="max-h-64">
-                    <CommandGroup heading="Miembros">
-                      {teamMembers.map((m) => {
-                        const checked = selectedUsers.includes(m.uid);
-                        return (
-                          <CommandItem
-                            key={m.uid}
-                            value={m.displayName || m.uid}
-                            onSelect={() => toggleUser(m.uid)}
-                            className="cursor-pointer"
-                          >
-                            <div className="mr-2 flex h-6 w-6 items-center justify-center rounded-full ring-1 ring-neutral-300/70 dark:ring-white/10">
-                              {m.photoURL ? (
-                                <img
-                                  src={m.photoURL}
-                                  alt={m.displayName || "usuario"}
-                                  className="h-6 w-6 rounded-full object-cover"
-                                />
-                              ) : (
-                                <span className="text-[10px] font-semibold">
-                                  {initials(m.displayName)}
-                                </span>
-                              )}
-                            </div>
-                            <span className="flex-1 truncate">{m.displayName}</span>
-                            <Checkbox checked={checked} className="pointer-events-none" />
-                          </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  </ScrollArea>
-                </CommandList>
-                {selectedUsers.length > 0 && (
-                  <div className="border-t p-2 text-right">
-                    <button
-                      className="text-xs text-muted-foreground hover:text-foreground"
-                      onClick={() => onUserFilterChange([])}
-                    >
-                      Limpiar selección
-                    </button>
-                  </div>
-                )}
-              </Command>
-            </PopoverContent>
-          </Popover>
-
-          {/* Chips usuarios */}
-          {selectedUserObjs.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {selectedUserObjs.map((u) => (
-                <button
-                  key={u.uid}
-                  onClick={() => toggleUser(u.uid)}
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs
-                             ring-2 ring-neutral-300/80 dark:ring-white/20 hover:ring-violet-500/60"
-                  title={u.displayName || ""}
-                >
-                  <span className="inline-flex h-4 w-4 items-center justify-center rounded-full ring-1 ring-neutral-300/70 dark:ring-white/10">
-                    {u.photoURL ? (
-                      <img
-                        src={u.photoURL}
-                        alt={u.displayName || "usuario"}
-                        className="h-4 w-4 rounded-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-[8px] font-semibold">{initials(u.displayName)}</span>
-                    )}
-                  </span>
-                  <span className="max-w-[120px] truncate">{u.displayName}</span>
-                  <X className="h-3 w-3 opacity-60" />
-                </button>
-              ))}
-            </div>
-          )}
+        {/* Filtro de Usuario */}
+        <div className="md:col-span-1">
+          <select
+            multiple
+            value={selectedUsers}
+            onChange={handleUserSelect}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+          >
+            <option value="" disabled>Filtrar por usuario...</option>
+            {teamMembers.map(member => (
+              <option key={member.uid} value={member.uid}>{member.displayName}</option>
+            ))}
+          </select>
         </div>
 
-        {/* Etiquetas */}
-        <div className="min-w-0">
-          <label className="sr-only">Filtrar por etiqueta</label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                className="flex h-11 w-full items-center justify-between gap-2 rounded-2xl bg-transparent px-3 text-left text-sm outline-none transition
-                           ring-2 ring-neutral-300/90 dark:ring-white/20
-                           hover:ring-violet-500/50 dark:hover:ring-violet-400/60
-                           focus-visible:ring-violet-500/70 dark:focus-visible:ring-violet-400/70"
-                aria-label="Filtrar por etiqueta"
-              >
-                <span className="inline-flex items-center gap-2 truncate">
-                  <TagIcon className="h-4 w-4 text-muted-foreground" />
-                  {selectedTagObjs.length > 0 ? (
-                    <span className="truncate">{selectedTagObjs.length} etiqueta(s)</span>
-                  ) : (
-                    <span className="text-muted-foreground">Filtrar por etiqueta...</span>
-                  )}
-                </span>
-                <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs ring-1 ring-neutral-300/70 dark:ring-white/10">
-                  {selectedTagObjs.length}
-                </span>
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className={popoverPanel}>
-              <Command className="bg-transparent">
-                
-                <CommandEmpty>Sin resultados.</CommandEmpty>
-                <CommandList>
-                  <ScrollArea className="max-h-64">
-                    <CommandGroup heading="Etiquetas">
-                      {availableTags.map((t) => {
-                        const checked = selectedTags.includes(t.id);
-                        return (
-                          <CommandItem
-                            key={t.id}
-                            value={t.tagName}
-                            onSelect={() => toggleTag(t.id)}
-                            className="cursor-pointer"
-                          >
-                            <span
-                              className="mr-2 inline-block h-3 w-3 rounded-full ring-1 ring-neutral-300/60 dark:ring-white/20"
-                              style={{ backgroundColor: t.color || "#64748b" }}
-                            />
-                            <span className="flex-1 truncate">{t.tagName}</span>
-                            <Checkbox checked={checked} className="pointer-events-none" />
-                          </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  </ScrollArea>
-                </CommandList>
-                {selectedTags.length > 0 && (
-                  <div className="border-t p-2 text-right">
-                    <button
-                      className="text-xs text-muted-foreground hover:text-foreground"
-                      onClick={() => onTagFilterChange([])}
-                    >
-                      Limpiar selección
-                    </button>
-                  </div>
-                )}
-              </Command>
-            </PopoverContent>
-          </Popover>
-
-          {/* Chips etiquetas */}
-          {selectedTagObjs.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {selectedTagObjs.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => toggleTag(t.id)}
-                  className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs
-                             ring-2 ring-neutral-300/80 dark:ring-white/20 hover:ring-violet-500/60"
-                  title={t.tagName}
-                >
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full ring-1 ring-neutral-300/60 dark:ring-white/20"
-                    style={{ backgroundColor: t.color || "#64748b" }}
-                  />
-                  <span className="max-w-[140px] truncate">{t.tagName}</span>
-                  <X className="h-3 w-3 opacity-60" />
-                </button>
-              ))}
-            </div>
-          )}
+        {/* Filtro de Etiqueta */}
+        <div className="md:col-span-1">
+          <select
+            multiple
+            value={selectedTags}
+            onChange={handleTagSelect}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+          >
+            <option value="" disabled>Filtrar por etiqueta...</option>
+            {availableTags.map(tag => (
+              // --- AQUÍ ESTÁN LOS CAMBIOS ---
+              // CAMBIO 1: Se usa `tagName` en lugar de `name` para mostrar el texto.
+              // CAMBIO 2: Se añade un círculo de color para mejorar la visualización.
+              <option key={tag.id} value={tag.id} style={{ color: tag.color }}>
+                {/* El color solo se aplica bien al texto/carácter, no al fondo o al layout */}
+                ● {tag.tagName}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
     </div>

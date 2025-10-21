@@ -29,7 +29,9 @@ export default function RegisterPage() {
     }
     setLoading(true)
     setError("")
-  const toastId = toast.loading("Registrando usuario...");
+    setLoadingEmail(true)
+    const toastId = toast.loading("Creando cuenta...")
+
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password)
       const user = userCredential.user
