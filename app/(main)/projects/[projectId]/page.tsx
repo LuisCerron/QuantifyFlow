@@ -1,95 +1,134 @@
-"use client"
+'use client';
 
-import { useEffect, useState } from "react"
-import { useParams } from "next/navigation"
-import { useAuth } from "@/hooks/use-auth"
-import { useTasks } from "@/hooks/use-tasks"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Plus } from "lucide-react"
-import Link from "next/link"
-import { KanbanBoard } from "@/components/kanban-board"
-import { TaskDetailsModal } from "@/components/task-details-modal"
-import type { Task } from "@/types"
+import { useState } from 'react';
+import { DragDropContext } from 'react-beautiful-dnd';
+import { useKanbanBoard } from '@/hooks/useKanbanBoard';
+import KanbanColumn from '@/components/projects/kanban/KanbanColumn';
+import ProjectHeader from '@/components/projects/kanban/ProjectHeader';
+import { useAuth } from '@/context/AuthContext';
+import { useCurrentTeam } from '@/hooks/useCurrentTeam';
+import TaskModal from '@/components/projects/kanban/TaskModal';
+import type { TaskWithDetails } from '@/types';
 
-export default function ProjectDetailPage() {
-  const params = useParams()
-  const projectId = params.projectId as string
-  const { user } = useAuth()
-  const { tasks, loading, fetchTasks, createTask, updateTask } = useTasks(projectId)
-  const [newTaskTitle, setNewTaskTitle] = useState("")
-  const [newTaskPriority, setNewTaskPriority] = useState<"low" | "medium" | "high">("medium")
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+interface ProjectPageProps {
+  params: {
+    projectId: string;
+  };
+}
 
-  useEffect(() => {
-    fetchTasks()
-  }, [projectId, fetchTasks])
+export default function ProjectPage({ params }: ProjectPageProps) {
+  const { projectId } = params;
+  const { user } = useAuth();
+  const { currentTeam, userRole, isLoading: isTeamLoading } = useCurrentTeam(user?.uid);
+  
+  const teamId = currentTeam?.teamId;
 
-  const handleCreateTask = async () => {
-    if (newTaskTitle.trim() && user) {
-      await createTask(user.uid, newTaskTitle, "", newTaskPriority, user.uid)
-      setNewTaskTitle("")
-    }
+  const { 
+      columns, 
+      isLoading: isBoardLoading, 
+      error, 
+      handleDragEnd, 
+      teamMembers,
+      availableTags,
+      searchQuery,
+      setSearchQuery,
+      assignedUserFilter,
+      setAssignedUserFilter,
+      tagFilter,
+      setTagFilter,
+      refreshTasks
+  } = useKanbanBoard(projectId, teamId || '');
+
+  // --- CAMBIOS CLAVE ---
+  // Estado para controlar la visibilidad del modal y la tarea seleccionada para edición
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<TaskWithDetails | null>(null);
+
+  // Abre el modal en modo CREACIÓN
+  const handleOpenModalForCreate = () => {
+    setSelectedTask(null); // Asegura que no haya una tarea seleccionada
+    setIsModalOpen(true);
+  };
+
+  // Abre el modal en modo EDICIÓN
+  const handleOpenModalForEdit = (task: TaskWithDetails) => {
+    setSelectedTask(task);
+    setIsModalOpen(true);
+  };
+
+  // Cierra el modal y limpia el estado
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedTask(null);
+  };
+
+  // Función que se ejecuta después de guardar (crear/editar) una tarea
+  const handleSaveChanges = () => {
+    refreshTasks(); // Refresca los datos del tablero
+    handleCloseModal(); // Cierra el modal
+  };
+  // --- FIN DE CAMBIOS CLAVE ---
+
+  const isLoading = isBoardLoading || isTeamLoading;
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-screen">Cargando proyecto...</div>;
+  }
+  
+  if (!teamId) {
+    return (
+      <div className="text-red-500 p-8 text-center">
+        Error: No se pudo encontrar el equipo o no perteneces a uno.
+      </div>
+    );
   }
 
-  const handleTaskMove = async (taskId: string, newStatus: Task["status"]) => {
-    await updateTask(taskId, { status: newStatus })
+  if (error) {
+    return <div className="text-red-500 p-8 text-center">Error: {error}</div>;
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link href="/projects" className="text-primary hover:underline text-sm mb-2 inline-block">
-            ← Back to Projects
-          </Link>
-          <h1 className="text-3xl font-bold text-foreground">Project Board</h1>
-          <p className="text-muted-foreground mt-2">Drag and drop tasks to organize your work</p>
-        </div>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Create New Task</CardTitle>
-          <CardDescription>Add a new task to this project</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            <Input
-              placeholder="Task title..."
-              value={newTaskTitle}
-              onChange={(e) => setNewTaskTitle(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && handleCreateTask()}
+    <div className="p-4 md:p-8 bg-gray-50 dark:bg-gray-900 min-h-screen">
+      <ProjectHeader
+        projectName={currentTeam?.teamName || "Cargando nombre..."}
+        teamMembers={teamMembers}
+        availableTags={availableTags}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        selectedUsers={assignedUserFilter}
+        onUserFilterChange={setAssignedUserFilter}
+        selectedTags={tagFilter}
+        onTagFilterChange={setTagFilter}
+        onNewTaskClick={handleOpenModalForCreate} // Conectado al manejador correcto
+      />
+      <DragDropContext onDragEnd={handleDragEnd}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {Object.values(columns).map(column => (
+            <KanbanColumn 
+                key={column.id} 
+                column={column} 
+                onTaskClick={handleOpenModalForEdit} 
+                onRefreshBoard={refreshTasks}
             />
-            <select
-              value={newTaskPriority}
-              onChange={(e) => setNewTaskPriority(e.target.value as "low" | "medium" | "high")}
-              className="px-3 py-2 border border-border rounded-md bg-background text-foreground"
-            >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-            <Button onClick={handleCreateTask} className="gap-2">
-              <Plus className="w-4 h-4" />
-              Add Task
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {loading ? (
-        <div className="text-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+          ))}
         </div>
-      ) : (
-        <KanbanBoard tasks={tasks} onTaskMove={handleTaskMove} onTaskClick={setSelectedTask} />
-      )}
-
-      {selectedTask && (
-        <TaskDetailsModal task={selectedTask} onClose={() => setSelectedTask(null)} onUpdate={updateTask} />
+      </DragDropContext>
+      
+      {/* El modal ahora se renderiza con todas las props necesarias */}
+      {isModalOpen && user && (
+        <TaskModal
+          isOpen={isModalOpen}
+          onClose={handleCloseModal}
+          onSave={handleSaveChanges}
+          taskToEdit={selectedTask}
+          projectId={projectId}
+          teamId={teamId}
+          userId={user.uid}
+          userRole={userRole}
+          teamMembers={teamMembers}
+          availableTags={availableTags}
+        />
       )}
     </div>
-  )
+  );
 }

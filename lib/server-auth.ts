@@ -1,58 +1,51 @@
 import { cookies } from 'next/headers';
-import { cache } from 'react';
-import { initializeAdminApp, admin } from '@/lib/firebase-admin';
+// Asumo que tu lib/firebase-admin exporta 'admin' y que tiene los métodos de auth
+import { admin, initializeAdminApp } from './firebase-admin'; 
+import { type DecodedIdToken } from 'firebase-admin/auth';
+import 'server-only'; // Recomendado para asegurar que este código solo corre en el servidor
 
-/**
- * Define un tipo de dato para el usuario autenticado que usaremos en la app.
- * Contiene solo la información esencial y segura para pasar entre componentes.
- */
-export interface AuthenticatedUser {
+// Define la interfaz de usuario que necesita el DashboardPage
+export interface CurrentUser {
   uid: string;
   email?: string;
   displayName?: string;
 }
 
 /**
- * Obtiene la sesión del usuario actual a partir de la cookie de sesión.
- * * Esta función está diseñada para ser usada exclusivamente en el servidor
- * (Server Components, Layouts, API Routes).
- * * Utiliza `cache` de React para garantizar que la verificación de la cookie
- * se ejecute una sola vez por cada petición al servidor, optimizando el rendimiento.
+ * Lee la cookie de sesión del request y verifica el token usando Firebase Admin.
+ * @returns Los datos del usuario actual o null si no está autenticado o la cookie es inválida.
  */
-export const getCurrentUser = cache(async (): Promise<AuthenticatedUser | null> => {
-  // 1. Asegura que el SDK de Firebase Admin esté listo para usarse.
-  await initializeAdminApp();
-
-  // 2. Lee la cookie 'session' desde la petición entrante.
+export async function getCurrentUser(): Promise<CurrentUser | null> {
+  await initializeAdminApp(); 
+  
   const sessionCookie = cookies().get('session')?.value;
 
+  // Log 1: Verificar si la cookie existe
   if (!sessionCookie) {
-    // Si no existe la cookie, el usuario no ha iniciado sesión.
+    console.log("❌ SERVER AUTH: No session cookie found.");
     return null;
   }
+  
+  // Log 2: Notificar que se encontró la cookie y se intentará verificar
+  console.log("✅ SERVER AUTH: Session cookie found. Verifying with Firebase Admin...");
 
   try {
-    // 3. Verifica la validez de la cookie con Firebase Admin.
-    // El segundo parámetro 'true' verifica si la sesión ha sido revocada.
-    const decodedToken = await admin.auth().verifySessionCookie(sessionCookie, true);
+    const decodedToken: DecodedIdToken = await admin.auth().verifySessionCookie(sessionCookie, true);
+    
+    // Log 3: Verificar que la decodificación fue exitosa
+    console.log("⭐ SERVER AUTH: Token verified. User UID:", decodedToken.uid);
 
-    // 4. Si la cookie es válida, extraemos y devolvemos los datos del usuario.
-    const currentUser: AuthenticatedUser = {
+    return {
       uid: decodedToken.uid,
       email: decodedToken.email,
-      displayName: decodedToken.name, // El token incluye 'name' para displayName
-    };
-    
-    return currentUser;
+      displayName: decodedToken.name || decodedToken.email?.split('@')[0], 
+    } as CurrentUser;
 
   } catch (error) {
-    // La cookie es inválida (expirada, malformada, etc.).
-    // Esto es un caso normal, no necesariamente un error crítico.
-    console.log("Cookie de sesión inválida o expirada:", error);
-    
-    // Opcional pero recomendado: Limpia la cookie inválida del navegador del usuario.
-    cookies().delete('session');
-
+    // Log 4: Capturar cualquier error de verificación (expiración, revocación)
+    console.error("❌ SERVER AUTH ERROR: Cookie verification failed.", error);
+    // Borrar la cookie para forzar un nuevo login limpio
+    cookies().delete('session'); 
     return null;
   }
-});
+}

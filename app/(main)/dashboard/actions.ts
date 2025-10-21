@@ -1,99 +1,134 @@
 // /app/(main)/dashboard/actions.ts
 'use server';
-
+import { enrichTaskWithDetails } from '@/services/kanbanService';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { Task, TaskWithDetails, TimeLog, User } from '@/types';
+import { collection, query, where, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { unstable_noStore as noStore } from 'next/cache';
+// Define los tipos de retorno para mayor claridad
 
-// Tipos para los datos del dashboard
-export interface AdminDashboardData {
+interface TaskStats {
+  todo: number;
+  inProgress: number;
+  done: number;
+}
+
+interface AdminDashboardData {
   projectCount: number;
-  taskStats: {
-    pending: number;
-    inProgress: number;
-    completed: number;
-  };
+  taskStats: TaskStats;
   totalHoursLogged: number;
 }
-
 export interface MemberTask {
   id: string;
-  titulo: string;
-  estado: 'pending' | 'inProgress' | 'completed';
-  prioridad: 'low' | 'medium' | 'high';
+  title: string;
+  status: Task['status'];
+  priority: Task['priority'];
 }
 
-/**
- * Obtiene el rol y el teamId de un usuario.
- */
 export async function getUserRoleAndTeam(userId: string): Promise<{ role: string; teamId: string } | null> {
-  noStore(); // Evita que esta función sea cacheada estáticamente
+  noStore();
+  console.log(`[Service] Buscando rol y equipo para el userId: ${userId}`);
+
   const teamMembersRef = collection(db, 'teamMembers');
   const q = query(teamMembersRef, where('userId', '==', userId));
+  
   const querySnapshot = await getDocs(q);
+  console.log(`[Service] Se encontraron ${querySnapshot.size} membresías para el usuario.`);
 
   if (querySnapshot.empty) {
-    return null; // El usuario no pertenece a ningún equipo
+    console.warn(`[Service] El usuario ${userId} no pertenece a ningún equipo.`);
+    return null; 
   }
 
   const memberDoc = querySnapshot.docs[0];
   const data = memberDoc.data();
-  return { role: data.role || 'member', teamId: data.teamId };
-}
 
-/**
- * Obtiene las estadísticas para el dashboard de un Administrador.
- */
+  if (!data) {
+    console.error(`[Service] El documento de membresía para ${userId} está vacío.`);
+    return null;
+  }
+
+  const result = { 
+    role: data.rol || 'member',
+    teamId: data.teamId        
+  };
+  
+  console.log('[Service] Rol y equipo encontrados:', result);
+  return result;
+}
 export async function getAdminDashboardData(teamId: string): Promise<AdminDashboardData> {
   noStore();
+  console.log(`[Service] Obteniendo datos del dashboard de admin para el teamId: ${teamId}`);
+
   const projectsRef = collection(db, 'projects');
   const tasksRef = collection(db, 'tasks');
   const timeLogRef = collection(db, 'timeLog');
 
+  // Ejecuta todas las consultas en paralelo para mayor eficiencia
+  const [projectsSnapshot, tasksSnapshot, timeLogSnapshot] = await Promise.all([
+    getDocs(query(projectsRef, where('teamId', '==', teamId))),
+    getDocs(query(tasksRef, where('teamId', '==', teamId))),
+    getDocs(query(timeLogRef, where('teamId', '==', teamId)))
+  ]);
+
+  console.log(`[Service] Proyectos: ${projectsSnapshot.size}, Tareas: ${tasksSnapshot.size}, Logs de tiempo: ${timeLogSnapshot.size}`);
+
   // 1. Contar proyectos
-  const projectsQuery = query(projectsRef, where('teamId', '==', teamId));
-  const projectsSnapshot = await getDocs(projectsQuery);
   const projectCount = projectsSnapshot.size;
 
   // 2. Obtener estadísticas de tareas
-  const tasksQuery = query(tasksRef, where('teamId', '==', teamId));
-  const tasksSnapshot = await getDocs(tasksQuery);
-  const taskStats = { pending: 0, inProgress: 0, completed: 0 };
+  const taskStats: TaskStats = { todo: 0, inProgress: 0, done: 0 };
   tasksSnapshot.forEach(doc => {
-    const task = doc.data();
-    if (task.estado === 'completed') taskStats.completed++;
-    else if (task.estado === 'inProgress') taskStats.inProgress++;
-    else taskStats.pending++;
+    const task = doc.data() as Task;
+    // CORREGIDO: Se usa 'status' en lugar de 'estado' y los valores correctos
+    if (task.status === 'done') taskStats.done++;
+    else if (task.status === 'in-progress') taskStats.inProgress++;
+    else taskStats.todo++;
   });
 
   // 3. Sumar horas registradas
-  const timeLogQuery = query(timeLogRef, where('teamId', '==', teamId));
-  const timeLogSnapshot = await getDocs(timeLogQuery);
   let totalMillis = 0;
   timeLogSnapshot.forEach(doc => {
-    const log = doc.data();
-    const startTime = (log.tiempoInicio as Timestamp).toMillis();
-    const endTime = (log.tiempoFin as Timestamp)?.toMillis() || startTime; // Si no hay fin, no suma tiempo
+    const log = doc.data() as TimeLog;
+    // CORREGIDO: Se usa 'startTime' y 'endTime' en lugar de 'tiempoInicio'/'tiempoFin'
+    const startTime = (log.startTime as unknown as Timestamp).toMillis();
+    const endTime = (log.endTime as unknown as Timestamp)?.toMillis() || startTime;
     totalMillis += (endTime - startTime);
   });
   const totalHoursLogged = Math.floor(totalMillis / (1000 * 60 * 60));
 
-  return { projectCount, taskStats, totalHoursLogged };
+  const result = { projectCount, taskStats, totalHoursLogged };
+  console.log('[Service] Datos del dashboard de admin generados:', result);
+  
+  return result;
 }
 
-/**
- * Obtiene las tareas asignadas para el dashboard de un Miembro.
- */
-export async function getMemberDashboardData(userId: string): Promise<MemberTask[]> {
+export async function getMemberDashboardData(userId: string): Promise<TaskWithDetails[]> {
   noStore();
+  console.log(`[Service] Obteniendo tareas detalladas para el miembro: ${userId}`);
+  
   const tasksRef = collection(db, 'tasks');
-  const q = query(tasksRef, where('usuarioAsignadoId', '==', userId));
-  const querySnapshot = await getDocs(q);
+  const q = query(tasksRef, where('assignedToId', '==', userId));
+  const tasksSnapshot = await getDocs(q);
+  const tasks: Task[] = tasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
 
-  return querySnapshot.docs.map(doc => ({
-    id: doc.id,
-    titulo: doc.data().titulo,
-    estado: doc.data().estado,
-    prioridad: doc.data().prioridad,
-  } as MemberTask));
+  if (tasks.length === 0) {
+      console.log(`[Service] No se encontraron tareas asignadas a ${userId}.`);
+      return [];
+  }
+
+  const usersCache: Record<string, User> = {};
+  const userRef = doc(db, 'users', userId);
+  const userSnap = await getDoc(userRef);
+  if (userSnap.exists()) {
+    usersCache[userId] = { uid: userSnap.id, ...userSnap.data() } as User;
+  }
+
+  // Usamos la misma función auxiliar para enriquecer las tareas de este usuario
+  const tasksWithDetails = await Promise.all(
+    tasks.map(task => enrichTaskWithDetails(task, usersCache))
+  );
+
+  console.log(`[Service] Se encontraron y enriquecieron ${tasksWithDetails.length} tareas para el miembro.`);
+  return tasksWithDetails;
 }

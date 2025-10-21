@@ -8,6 +8,7 @@ import { auth, db } from "@/lib/firebase"
 import { doc, setDoc } from "firebase/firestore"
 import Link from "next/link"
 import { Github, Mail, Lock, EyeOff, Eye, Workflow, User } from "lucide-react"
+import { toast } from "sonner"
 
 export default function RegisterPage() {
   const [displayName, setDisplayName] = useState("")
@@ -28,7 +29,7 @@ export default function RegisterPage() {
     }
     setLoading(true)
     setError("")
-
+const toastId = toast.loading("Registrando usuario...");
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password)
       const user = userCredential.user
@@ -43,7 +44,7 @@ export default function RegisterPage() {
         },
         createdAt: new Date(),
       })
-
+      toast.success("¡Registro exitoso!", { id: toastId });
       router.push("/onboarding")
     } catch (err) {
       let errorMessage = "Fallo en el registro. Por favor, inténtalo de nuevo."

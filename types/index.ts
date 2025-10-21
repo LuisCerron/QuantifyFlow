@@ -1,3 +1,6 @@
+import { Timestamp } from "firebase/firestore"
+
+
 export interface User {
   uid: string
   email: string
@@ -12,7 +15,7 @@ export interface User {
 
 export interface Team {
   id: string
-  name: string
+  teamName: string
   description?: string
   ownerUid: string
   createdAt: Date
@@ -23,7 +26,7 @@ export interface TeamMember {
   id: string
   teamId: string
   userId: string
-  role: "admin" | "member"
+  rol: "admin" | "member"
   joinedAt: Date
 }
 
@@ -33,37 +36,17 @@ export interface Project {
   name: string
   description?: string
   status: "active" | "archived"
+  taskCount?: number
   createdAt: Date
   updatedAt: Date
 }
 
-export interface Task {
-  id: string
-  projectId: string
-  teamId: string
-  title: string
-  description?: string
-  status: "todo" | "in-progress" | "done"
-  priority: "low" | "medium" | "high"
-  assignedToId?: string
-  createdBy: string
-  createdAt: Date
-  updatedAt: Date
-  dueDate?: Date
-}
 
-export interface Subtask {
-  id: string
-  taskId: string
-  title: string
-  completed: boolean
-  createdAt: Date
-}
 
 export interface Tag {
   id: string
   teamId: string
-  name: string
+  tagName: string
   color: string
   createdAt: Date
 }
@@ -87,4 +70,31 @@ export interface TimeLog {
   endTime?: Date
   duration?: number
   createdAt: Date
+}
+export interface Task {
+  id: string
+  projectId: string
+  teamId: string
+  title: string
+  description?: string
+  status: "todo" | "in-progress" | "done"
+  priority: "low" | "medium" | "high"
+  assignedToId?: string
+  createdBy: string
+  createdAt: Date
+  updatedAt: Date
+  dueDate?: Date | Timestamp;
+}
+
+export interface Subtask {
+  id: string
+  taskId: string
+  title: string
+  completed: boolean
+  createdAt: Date
+}
+export interface TaskWithDetails extends Task {
+  assignedTo?: User;
+  subtasks: Subtask[];
+  tags: Tag[];
 }

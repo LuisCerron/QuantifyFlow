@@ -1,124 +1,84 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import Link from "next/link"
-import { useAuth } from "@/hooks/use-auth"
-import { useTeam } from "@/hooks/use-team"
-import { useProjects } from "@/hooks/use-projects"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Plus, Search } from "lucide-react"
+import { useAuth } from "@/context/AuthContext";
+import { useProjects } from "@/hooks/useProjects";
+import { useCurrentTeam } from "@/hooks/useCurrentTeam"; 
+import { ProjectCard } from "@/components/projects/ProjectCard";
+import { CreateProjectModal } from "@/components/projects/CreateProjectModal";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { PlusCircle, Search } from "lucide-react";
+
+// Componente para el estado de carga
+const SkeletonLoader = () => (
+  <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+    {Array.from({ length: 3 }).map((_, i) => (
+      <div key={i} className="bg-card border rounded-lg p-4 space-y-4 animate-pulse">
+        <div className="h-6 bg-muted rounded w-3/4"></div>
+        <div className="h-4 bg-muted rounded w-full"></div>
+        <div className="h-4 bg-muted rounded w-1/2"></div>
+        <div className="pt-4 mt-auto flex justify-end">
+           <div className="h-5 bg-muted rounded w-1/4"></div>
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
 
 export default function ProjectsPage() {
-  const { user } = useAuth()
-  const [teamId, setTeamId] = useState<string | null>(null)
-  const { team, members, fetchTeam } = useTeam(teamId)
-  const { projects, loading, fetchProjects, createProject } = useProjects(teamId)
-  const [searchQuery, setSearchQuery] = useState("")
-  const [newProjectName, setNewProjectName] = useState("")
-  const [showNewProject, setShowNewProject] = useState(false)
+  const { user } = useAuth();
+  const { currentTeam, userRole, isLoading: isLoadingTeam } = useCurrentTeam(user?.uid);
+  const { projects, isLoading: isLoadingProjects, error, refreshProjects, setSearchTerm } = useProjects(currentTeam?.teamId);
 
-  useEffect(() => {
-    if (user) {
-      setTeamId(user.uid)
-      fetchTeam()
-    }
-  }, [user, fetchTeam])
+  const isAdmin = userRole === 'admin';
+  const isLoading = isLoadingTeam || isLoadingProjects;
 
-  useEffect(() => {
-    if (teamId) {
-      fetchProjects()
-    }
-  }, [teamId, fetchProjects])
-
-  const handleCreateProject = async () => {
-    if (newProjectName.trim()) {
-      await createProject(newProjectName)
-      setNewProjectName("")
-      setShowNewProject(false)
-    }
+  if (error) {
+    return <div className="text-destructive text-center mt-10">{error}</div>;
   }
 
-  const filteredProjects = projects.filter((project) => project.name.toLowerCase().includes(searchQuery.toLowerCase()))
-
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">Projects</h1>
-          <p className="text-muted-foreground mt-2">Manage and organize your projects</p>
-        </div>
-        <Button onClick={() => setShowNewProject(!showNewProject)} className="gap-2">
-          <Plus className="w-4 h-4" />
-          New Project
-        </Button>
-      </div>
-
-      {showNewProject && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Create New Project</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-2">
-              <Input
-                placeholder="Project name..."
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleCreateProject()}
-              />
-              <Button onClick={handleCreateProject}>Create</Button>
-              <Button variant="outline" onClick={() => setShowNewProject(false)}>
-                Cancel
+    <div className="container mx-auto p-6">
+      <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6">
+        <h1 className="text-3xl font-bold">Proyectos</h1>
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <div className="relative w-full md:w-64">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input 
+              placeholder="Buscar proyectos..." 
+              className="pl-8"
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          {isAdmin && (
+            <CreateProjectModal teamId={currentTeam?.teamId} onProjectCreated={refreshProjects}>
+              <Button>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Nuevo Proyecto
               </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="relative">
-        <Search className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
-        <Input
-          placeholder="Search projects..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-10"
-        />
+            </CreateProjectModal>
+          )}
+        </div>
       </div>
 
-      {loading ? (
-        <div className="text-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+      {isLoading ? (
+        <SkeletonLoader />
+      ) : projects.length === 0 ? (
+        <div className="text-center py-12 border-2 border-dashed rounded-lg">
+          <h2 className="text-xl font-semibold">No se encontraron proyectos</h2>
+          <p className="text-muted-foreground mt-2">
+            Intenta ajustar tu búsqueda o crea un nuevo proyecto si eres administrador.
+          </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredProjects.length > 0 ? (
-            filteredProjects.map((project) => (
-              <Link key={project.id} href={`/projects/${project.id}`}>
-                <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
-                  <CardHeader>
-                    <CardTitle>{project.name}</CardTitle>
-                    <CardDescription>{project.description || "No description"}</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">0 tasks</span>
-                      <span className="text-xs px-2 py-1 bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100 rounded-full">
-                        {project.status}
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))
-          ) : (
-            <div className="col-span-full text-center py-8">
-              <p className="text-muted-foreground">No projects found. Create one to get started!</p>
-            </div>
-          )}
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {projects.map((project) => (
+            <ProjectCard key={project.id} project={project} />
+          ))}
         </div>
       )}
     </div>
-  )
+  );
 }
+

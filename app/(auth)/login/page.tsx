@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import Link from "next/link"
 import { CheckSquare, Github, Mail, Lock, EyeOff, Eye, Workflow } from "lucide-react"
+import { toast } from "sonner"
 
 
 export default function LoginPage() {
@@ -18,7 +19,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
+  const [error, setError] = useState("") 
   const router = useRouter()
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -26,25 +27,57 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
 
+    // Usamos un toast de carga para mejor feedback
+    const toastId = toast.loading("Iniciando sesión...");
+
     try {
+      // 1. Autenticar con Firebase
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      console.log("✅ Autenticación con Firebase exitosa."); // <-- Log para ti
+
       const user = userCredential.user;
       const token = await user.getIdToken();
 
-      await fetch("/api/auth/login", {
+      // 2. Llamar a tu API
+      console.log("⏳ Llamando a la API /api/auth/login..."); // <-- Log para ti
+      const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
       });
       
-      router.push("/dashboard");
-    } catch (err) {
-      let errorMessage = "Fallo al iniciar sesión. Por favor, revisa tus credenciales.";
-
-      if (err instanceof Error && (err.message.includes("auth/invalid-credential") || err.message.includes("auth/wrong-password") || err.message.includes("auth/user-not-found"))) {
-        errorMessage = "Correo o contraseña incorrectos.";
+      // 3. VERIFICACIÓN CRÍTICA
+      if (!response.ok) {
+        // Leemos el cuerpo del error que envía tu API para saber qué pasó
+        const errorData = await response.json().catch(() => ({ message: "Error desconocido en el servidor." }));
+        console.error("❌ Error en la API:", response.status, errorData); // <-- Log CLAVE para ti
+        
+        // Lanzamos un error con el mensaje del servidor
+        throw new Error(errorData.message || "Fallo al crear la sesión en el servidor.");
       }
+      
+      console.log("✅ Sesión creada en el servidor exitosamente."); // <-- Log para ti
+      toast.success("¡Inicio de sesión exitoso!", { id: toastId }); // <-- Notificación para el usuario
+
+      // 4. Redirigir
+      router.replace("/dashboard");
+
+    } catch (err) {
+      console.error("🐛 Error en el proceso de login:", err); // <-- Log del error completo para ti
+      
+      let errorMessage = "Ocurrió un error inesperado.";
+      if (err instanceof Error) {
+        if (err.message.includes("auth/invalid-credential")) {
+          errorMessage = "Correo o contraseña incorrectos.";
+        } else {
+          // Usamos el mensaje del error que lanzamos arriba
+          errorMessage = err.message;
+        }
+      }
+      
       setError(errorMessage);
+      toast.error(errorMessage, { id: toastId }); // <-- Notificación de error para el usuario
+
     } finally {
       setLoading(false);
     }

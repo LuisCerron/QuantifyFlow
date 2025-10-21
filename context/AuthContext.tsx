@@ -1,84 +1,75 @@
-// En, por ejemplo, context/AuthContext.tsx
 'use client';
 
-import { 
-  useEffect, 
-  useState, 
-  useCallback, 
-  createContext, 
+import {
+  useEffect,
+  useState,
+  createContext,
   useContext,
   type ReactNode
 } from 'react';
-import { type User as FirebaseUser, onAuthStateChanged, signOut } from 'firebase/auth';
+import { usePathname, useRouter } from 'next/navigation';
+import { type User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
-import type { User } from '@/types'; // Tu tipo de usuario de Firestore
+import type { User } from '@/types';
 
-// Interfaz para el valor del contexto
+// 1. Se elimina 'logout' de la interfaz
 interface AuthContextType {
-  user: User | null;      // Un solo objeto de usuario, combinado y listo para usar
+  user: User | null;
   isLoading: boolean;
-  logout: () => Promise<void>;
 }
 
-// 1. Creamos el Contexto con un valor inicial undefined
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// 2. Creamos el Proveedor (AuthProvider)
-// Este componente envolverá tu aplicación y gestionará el estado de autenticación.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true); // Empieza en true hasta que se verifique el estado inicial
-
-  const logout = useCallback(async () => {
-    try {
-      await signOut(auth);
-      // El listener onAuthStateChanged se encargará de poner user a null
-    } catch (error) {
-      console.error("Error al cerrar sesión:", error);
-    }
-  }, []);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
-    // Este listener es el corazón de la autenticación en tiempo real
+    const publicPaths = ['/login', '/register', '/forgot-password', '/onboarding'];
+    const isPublicPath = publicPaths.some(path => pathname.startsWith(path));
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
       try {
         if (firebaseUser) {
-          // Usuario autenticado: buscamos su perfil en Firestore
           const userDocRef = doc(db, "users", firebaseUser.uid);
           const userDoc = await getDoc(userDocRef);
-
           if (userDoc.exists()) {
-            // Combinamos el uid de Auth con los datos de Firestore
             const userData = {
               uid: firebaseUser.uid,
               ...userDoc.data()
             } as User;
             setUser(userData);
           } else {
-            // Caso borde: usuario en Firebase Auth pero no en Firestore.
-            // Puedes manejarlo creando un documento aquí o simplemente no logueándolo.
-            console.warn("Usuario autenticado pero sin perfil en Firestore.");
-            setUser(null);
+            console.warn("Usuario autenticado pero sin perfil completo en Firestore (probablemente en onboarding).");
+            setUser({
+              uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              displayName: firebaseUser.displayName,
+            } as User);
           }
         } else {
-          // No hay usuario autenticado
+
           setUser(null);
+          if (!isPublicPath) {
+            router.replace('/login');
+          }
         }
       } catch (error) {
         console.error("Error en el estado de autenticación:", error);
         setUser(null);
       } finally {
-        // La verificación inicial ha terminado, ya no estamos cargando
         setIsLoading(false);
       }
     });
 
-    // La función de limpieza que se ejecuta cuando el componente se desmonta
     return () => unsubscribe();
-  }, []);
+  }, [pathname, router]);
 
-  const value = { user, isLoading, logout };
+  // 4. Se elimina 'logout' del objeto 'value'
+  const value = { user, isLoading };
 
   return (
     <AuthContext.Provider value={value}>
@@ -87,14 +78,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-// 3. Creamos el Hook (useAuth)
-// Este es el hook que tus componentes usarán para acceder al contexto.
 export function useAuth() {
   const context = useContext(AuthContext);
-
   if (context === undefined) {
     throw new Error('useAuth debe ser usado dentro de un AuthProvider');
   }
-
   return context;
 }

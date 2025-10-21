@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
-  const token = request.cookies.get("__session")?.value
+  const token = request.cookies.get("session")?.value
 
   // NUEVO: Redirige desde la raíz a la página correcta
   if (pathname === "/") {
