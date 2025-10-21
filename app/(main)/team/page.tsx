@@ -102,7 +102,7 @@ export default function TeamPage() {
                   selectedTeamId === team.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
                 }`}
               >
-                <p className="font-medium">{team.name}</p>
+                <p className="font-medium">{team.teamName}</p>
                 <p className="text-sm text-muted-foreground">{team.description || "No description"}</p>
               </div>
             ))
@@ -186,7 +186,7 @@ export default function TeamPage() {
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-                          {member.role === "admin" ? (
+                          {member.rol === "admin" ? (
                             <Shield className="w-4 h-4 text-primary" />
                           ) : (
                             <User className="w-4 h-4 text-muted-foreground" />
@@ -199,7 +199,7 @@ export default function TeamPage() {
                       </div>
                       <div className="flex items-center gap-2">
                         <select
-                          value={member.role}
+                          value={member.rol}
                           onChange={(e) => updateMemberRole(member.id, e.target.value as "admin" | "member")}
                           className="text-xs px-2 py-1 border border-border rounded-md bg-background text-foreground"
                         >
