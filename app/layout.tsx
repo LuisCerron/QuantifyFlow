@@ -45,7 +45,7 @@ export default function RootLayout({
           </AuthProvider>
         </NextThemesProvider>
         </AuthListener>
-        <Analytics />
+        {process.env.VERCEL === '1' && <Analytics />}
       </body>
     </html>
   )

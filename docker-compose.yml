@@ -1,4 +1,6 @@
-version: "3.8"
+# IMPORTANTE: Para producción, crea un archivo .env con tus credenciales reales
+# y luego ejecuta: docker compose build --no-cache && docker compose up -d
+# Los valores de NEXT_PUBLIC_* se queman en el JS bundle durante el build.
 
 services:
   app:
