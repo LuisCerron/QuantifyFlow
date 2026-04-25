@@ -1,4 +1,6 @@
 // app/projects/[projectId]/archive/page.tsx
+export const dynamic = 'force-dynamic';
+
 import { getCurrentUser } from '@/lib/server-auth';
 import { redirect } from 'next/navigation';
 import { getUserRoleAndTeam } from '@/app/(main)/dashboard/actions'; // O donde tengas esta función

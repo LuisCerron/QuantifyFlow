@@ -1,4 +1,5 @@
 // app/dashboard/page.tsx
+export const dynamic = 'force-dynamic';
 
 import { AdminDashboard } from '@/components/dashboards/admin-dashboard';
 import { MemberDashboard } from '@/components/dashboards/member-dashboard';

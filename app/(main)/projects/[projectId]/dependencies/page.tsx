@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { notFound } from 'next/navigation';
 import { getProjectById } from '@/services/projectService';
 import { getProjectTasks } from '@/services/kanbanService';
