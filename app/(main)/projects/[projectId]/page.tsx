@@ -1,22 +1,58 @@
 "use client";
 
-
 import React, { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
-import { DragDropContext, DropResult } from "react-beautiful-dnd";
+import type { DropResult } from "react-beautiful-dnd";
 
 import { useAuth } from "@/context/AuthContext";
 import { useCurrentTeam } from "@/hooks/useCurrentTeam";
 import { useKanbanBoard } from "@/hooks/useKanbanBoard";
 
 import ProjectHeader from "@/components/projects/kanban/ProjectHeader";
-import KanbanColumn from "@/components/projects/kanban/KanbanColumn";
-import TaskModal from "@/components/projects/kanban/TaskModal";
 import type { TaskWithDetails } from "@/types";
-import KanbanColumnsWrapper from "@/components/projects/kanban/KanbanColumnsWrapper";
 import Spinner from "@/components/ui/spinner";
 import { toast } from "sonner";
 import { archiveAllDoneTasks } from "@/services/kanbanService";
+
+const TaskModal = dynamic(
+  () => import("@/components/projects/kanban/TaskModal"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-black/55 backdrop-blur-sm" />
+        <div className="animate-pulse bg-muted rounded-2xl h-[400px] w-full max-w-2xl" />
+      </div>
+    ),
+  }
+);
+
+const KanbanBoard = dynamic(
+  () => import("@/components/projects/kanban/KanbanBoard"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="mt-4 flex gap-4 md:gap-6 overflow-x-auto pb-6">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex-[0_0_320px] md:flex-[0_0_360px] xl:flex-[0_0_380px] shrink-0">
+            <div className="rounded-2xl border-2 border-black dark:border-transparent dark:bg-white/5 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="h-5 w-28 animate-pulse rounded bg-muted" />
+                <div className="h-5 w-8 animate-pulse rounded bg-muted" />
+              </div>
+              <div className="space-y-3">
+                {Array.from({ length: 4 }).map((__, j) => (
+                  <div key={j} className="h-28 animate-pulse rounded-xl bg-muted/70" />
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    ),
+  }
+);
 
 interface ProjectPageProps {
   params: { projectId: string };
@@ -33,6 +69,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
   const {
     columns,
+    allTasks,
     isLoading: isBoardLoading,
     error,
     handleDragEnd,
@@ -47,6 +84,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     refreshTasks,
     handleSubtaskToggle,
     updatingSubtaskId,
+    dependencyMap,
   } = useKanbanBoard(projectId, teamId);
   const [isArchivingAll, setIsArchivingAll] = useState(false);
   // Estado modal (crear/editar)
@@ -165,21 +203,16 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           <Spinner size={40} label="Cargando tareas…" />
         </div>
       ) : (
-        <DragDropContext onDragEnd={handleDragEnd as (result: DropResult) => void}>
-          <KanbanColumnsWrapper className="mt-4 pb-6">
-            {Object.values(columns).map((column) => (
-              <KanbanColumn
-                key={column.id}
-                column={column}
-                onTaskClick={openEditModal}
-                onSubtaskToggle={handleSubtaskToggle}
-                updatingSubtaskId={updatingSubtaskId}
-                userRole={userRole}
-                currentUserId={user!.uid}
-              />
-            ))}
-          </KanbanColumnsWrapper>
-        </DragDropContext>
+        <KanbanBoard
+          columns={columns}
+          onDragEnd={handleDragEnd as (result: DropResult) => void}
+          onTaskClick={openEditModal}
+          onSubtaskToggle={handleSubtaskToggle}
+          updatingSubtaskId={updatingSubtaskId}
+          userRole={userRole}
+          currentUserId={user!.uid}
+          dependencyMap={dependencyMap}
+        />
       )}
 
       {/* Modal de tarea */}
@@ -195,6 +228,7 @@ export default function ProjectPage({ params }: ProjectPageProps) {
           userRole={userRole}
           teamMembers={teamMembers}
           availableTags={availableTags}
+          allProjectTasks={allTasks}
         />
       )}
     </div>

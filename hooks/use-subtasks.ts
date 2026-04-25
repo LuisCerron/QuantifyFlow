@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { collection, query, where, getDocs, doc, addDoc, updateDoc, deleteDoc, Timestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import type { Subtask } from "@/types"
@@ -45,38 +45,44 @@ export function useSubtasks(taskId: string | null) {
           completed: false,
           createdAt: new Date(),
         }
-        setSubtasks([...subtasks, newSubtask])
+        setSubtasks((prev) => [...prev, newSubtask])
         return newSubtask
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to create subtask"))
       }
     },
-    [taskId, subtasks],
+    [taskId],
   )
 
   const updateSubtask = useCallback(
     async (subtaskId: string, updates: Partial<Subtask>) => {
       try {
         await updateDoc(doc(db, "subtasks", subtaskId), updates)
-        setSubtasks(subtasks.map((s) => (s.id === subtaskId ? { ...s, ...updates } : s)))
+        setSubtasks((prev) => prev.map((s) => (s.id === subtaskId ? { ...s, ...updates } : s)))
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to update subtask"))
       }
     },
-    [subtasks],
+    [],
   )
 
   const deleteSubtask = useCallback(
     async (subtaskId: string) => {
       try {
         await deleteDoc(doc(db, "subtasks", subtaskId))
-        setSubtasks(subtasks.filter((s) => s.id !== subtaskId))
+        setSubtasks((prev) => prev.filter((s) => s.id !== subtaskId))
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to delete subtask"))
       }
     },
-    [subtasks],
+    [],
   )
+
+  useEffect(() => {
+    if (taskId) {
+      fetchSubtasks()
+    }
+  }, [taskId, fetchSubtasks])
 
   return { subtasks, loading, error, fetchSubtasks, createSubtask, updateSubtask, deleteSubtask }
 }

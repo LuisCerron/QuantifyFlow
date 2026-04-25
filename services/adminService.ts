@@ -9,7 +9,7 @@ import {
     getDoc,
     orderBy,
     limit,
-    getCountFromServer, // 👈 1. Importado
+    getCountFromServer,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import {
@@ -19,53 +19,102 @@ import {
     Task,
     ActivityLog,
     TeamMember,
-    TaskCountBreakdown, // 👈 2. Importado
+    TaskCountBreakdown,
 } from '@/types/index';
 import {
     AdminDashboardData,
     TeamMemberWithDetails,
 } from '@/types/dashboard-types';
 import { getCurrentUserTasks } from './kanbanService';
+import { chunkArray } from '@/lib/utils/helpers';
 
-// 3. Helper copiado de projectService para obtener desglose de tareas
-async function getTaskBreakdown(
-    projectId: string
-): Promise<TaskCountBreakdown> {
+const FIREBASE_IN_LIMIT = 10;
+
+function serializeForClient<T extends Record<string, any>>(data: T): T {
+    const serialized = { ...data } as Record<string, any>;
+    
+    for (const key in serialized) {
+        const value = serialized[key];
+        
+        if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
+            serialized[key] = value.toDate().toISOString();
+        }
+        else if (value && typeof value === 'object' && 'seconds' in value && 'nanoseconds' in value) {
+            serialized[key] = new Date(value.seconds * 1000).toISOString();
+        }
+        else if (Array.isArray(value)) {
+            serialized[key] = value.map((item: any) => 
+                typeof item === 'object' && item !== null ? serializeForClient(item) : item
+            );
+        }
+        else if (value && typeof value === 'object' && value !== null && !('toDate' in value) && !('seconds' in value)) {
+            serialized[key] = serializeForClient(value);
+        }
+    }
+    
+    return serialized as T;
+}
+
+async function getBatchTaskBreakdown(projectIds: string[]): Promise<Map<string, TaskCountBreakdown>> {
+    const breakdownMap = new Map<string, TaskCountBreakdown>();
+    if (projectIds.length === 0) return breakdownMap;
+
     const tasksRef = collection(db, 'tasks');
+    const chunks = chunkArray(projectIds, FIREBASE_IN_LIMIT);
 
-    // Query base (solo tareas no archivadas)
-    const baseQuery = query(
-        tasksRef,
-        where('projectId', '==', projectId),
-        where('isArchived', '==', false)
+    const allTasksByProject = new Map<string, number>();
+    const todoTasksByProject = new Map<string, number>();
+    const inProgressTasksByProject = new Map<string, number>();
+    const doneTasksByProject = new Map<string, number>();
+
+    await Promise.all(
+        chunks.map(async (chunk) => {
+            const baseQuery = query(
+                tasksRef,
+                where('projectId', 'in', chunk),
+                where('isArchived', '==', false)
+            );
+
+            const snapshot = await getDocs(baseQuery);
+            snapshot.docs.forEach((d) => {
+                const projectId = d.data().projectId;
+                const status = d.data().status;
+                allTasksByProject.set(projectId, (allTasksByProject.get(projectId) || 0) + 1);
+                if (status === 'todo') todoTasksByProject.set(projectId, (todoTasksByProject.get(projectId) || 0) + 1);
+                if (status === 'in-progress') inProgressTasksByProject.set(projectId, (inProgressTasksByProject.get(projectId) || 0) + 1);
+                if (status === 'done') doneTasksByProject.set(projectId, (doneTasksByProject.get(projectId) || 0) + 1);
+            });
+        })
     );
 
-    // Queries para cada estado
-    const allSnap = getCountFromServer(baseQuery);
-    const todoSnap = getCountFromServer(
-        query(baseQuery, where('status', '==', 'todo'))
-    );
-    const inProgressSnap = getCountFromServer(
-        query(baseQuery, where('status', '==', 'in-progress'))
-    );
-    const doneSnap = getCountFromServer(
-        query(baseQuery, where('status', '==', 'done'))
-    );
+    projectIds.forEach((projectId) => {
+        breakdownMap.set(projectId, {
+            all: allTasksByProject.get(projectId) || 0,
+            todo: todoTasksByProject.get(projectId) || 0,
+            inProgress: inProgressTasksByProject.get(projectId) || 0,
+            done: doneTasksByProject.get(projectId) || 0,
+        });
+    });
 
-    // Esperamos todas las consultas en paralelo
-    const [allCount, todoCount, inProgressCount, doneCount] = await Promise.all([
-        allSnap,
-        todoSnap,
-        inProgressSnap,
-        doneSnap,
-    ]);
+    return breakdownMap;
+}
 
-    return {
-        all: allCount.data().count,
-        todo: todoCount.data().count,
-        inProgress: inProgressCount.data().count,
-        done: doneCount.data().count,
-    };
+async function batchFetchUsers(userIds: string[]): Promise<Record<string, User>> {
+    const users: Record<string, User> = {};
+    if (userIds.length === 0) return users;
+
+    const uniqueIds = [...new Set(userIds)];
+    const chunks = chunkArray(uniqueIds, FIREBASE_IN_LIMIT);
+    await Promise.all(
+        chunks.map(async (chunk) => {
+            const q = query(collection(db, 'users'), where('__name__', 'in', chunk));
+            const snapshot = await getDocs(q);
+            snapshot.docs.forEach((d) => {
+                users[d.id] = { uid: d.id, ...d.data() } as User;
+            });
+        })
+    );
+    return users;
 }
 
 export const getAdminDashboardData = async (
@@ -76,7 +125,6 @@ export const getAdminDashboardData = async (
         `[AdminService] Iniciando la obtención de datos para el equipo: ${teamId}`
     );
 
-    // 1. Validar que el equipo existe
     const teamRef = doc(db, 'teams', teamId);
     const teamSnap = await getDoc(teamRef);
 
@@ -92,15 +140,13 @@ export const getAdminDashboardData = async (
     );
 
     try {
-        // 2. Ejecutar todas las demás consultas en paralelo para máxima eficiencia
         const [
             members,
-            projects, // Esta es la sección que se modificará
+            projects,
             tasks,
             recentActivity,
             adminAssignedTasks,
         ] = await Promise.all([
-            // --- Obtener Miembros del Equipo con sus Detalles de Usuario ---
             (async (): Promise<TeamMemberWithDetails[]> => {
                 const membersQuery = query(
                     collection(db, 'teamMembers'),
@@ -108,7 +154,7 @@ export const getAdminDashboardData = async (
                 );
                 const membersSnap = await getDocs(membersQuery);
                 const memberDocsData = membersSnap.docs.map((d) => ({
-                    id: d.id, // ID del documento teamMembers
+                    id: d.id,
                     ...(d.data() as Omit<TeamMember, 'id'>),
                 }));
 
@@ -118,18 +164,8 @@ export const getAdminDashboardData = async (
                 if (memberDocsData.length === 0) return [];
 
                 const userIds = memberDocsData.map((m) => m.userId);
-                // Asumiendo que userId es el ID del documento en 'users'
-                const usersQuery = query(
-                    collection(db, 'users'),
-                    where('__name__', 'in', userIds)
-                );
-                const usersSnap = await getDocs(usersQuery);
-                const usersDataMap: Record<string, User> = {};
-                usersSnap.forEach((d) => {
-                    usersDataMap[d.id] = { uid: d.id, ...d.data() } as User;
-                });
+                const usersDataMap = await batchFetchUsers(userIds);
 
-                // Unir datos de usuario con datos de miembro (rol, fecha de unión)
                 const membersWithDetails: TeamMemberWithDetails[] = memberDocsData.map(
                     (memberDoc) => {
                         const userDetail = usersDataMap[memberDoc.userId];
@@ -140,10 +176,10 @@ export const getAdminDashboardData = async (
                                 email: '',
                                 preferences: { theme: 'light', colorPalette: 'default' },
                                 createdAt: new Date(),
-                            }), // Fallback más completo
+                            }),
                             role: memberDoc.rol,
                             teamMemberDocId: memberDoc.id,
-                            joinedAt: memberDoc ? memberDoc.joinedAt : undefined, // Si tienes joinedAt
+                            joinedAt: memberDoc ? memberDoc.joinedAt : undefined,
                         };
                     }
                 );
@@ -153,15 +189,12 @@ export const getAdminDashboardData = async (
                 return membersWithDetails;
             })(),
 
-            // --- 4. MODIFICADO: Obtener Proyectos con desglose de tareas ---
             (async (): Promise<Project[]> => {
-                // Nota: A diferencia de projectService, aquí traemos TODOS (activos y archivados)
-                // porque es un dashboard de admin.
                 const projectsQuery = query(
                     collection(db, 'projects'),
                     where('teamId', '==', teamId),
-                    where('status', '==', 'active'),   // 👈 1. Solo activos
-                    orderBy('updatedAt', 'desc'), // 👈 2. Más recientes primero
+                    where('status', '==', 'active'),
+                    orderBy('updatedAt', 'desc'),
                     limit(6)
                 );
                 const projectsSnap = await getDocs(projectsQuery);
@@ -178,23 +211,21 @@ export const getAdminDashboardData = async (
                     `[AdminService] Obtenidos ${projectsData.length} proyectos base.`
                 );
 
-                // Para cada proyecto, obtenemos el desglose de tareas
-                const projectPromises = projectsData.map(async (project) => {
-                    const taskCounts = await getTaskBreakdown(project.id); // 👈 Usamos el helper
-                    return {
-                        ...project,
-                        taskCounts: taskCounts, // 👈 Asignamos el desglose
-                    };
-                });
+                if (projectsData.length === 0) return [];
 
-                const projectsWithCounts = await Promise.all(projectPromises);
+                const taskCountsMap = await getBatchTaskBreakdown(projectsData.map(p => p.id));
+
+                const projectsWithCounts = projectsData.map(project => ({
+                    ...project,
+                    taskCounts: taskCountsMap.get(project.id) || { all: 0, todo: 0, inProgress: 0, done: 0 },
+                }));
+
                 console.log(
                     `[AdminService] ✅ Obtenidos ${projectsWithCounts.length} proyectos con conteo de tareas.`
                 );
                 return projectsWithCounts;
             })(),
 
-            // --- Obtener todas las Tareas del Equipo (sin cambios) ---
             (async (): Promise<Task[]> => {
                 const tasksQuery = query(
                     collection(db, 'tasks'),
@@ -211,7 +242,6 @@ export const getAdminDashboardData = async (
                 return tasksData;
             })(),
 
-            // --- Obtener la Actividad Reciente del Equipo (sin cambios) ---
             (async (): Promise<ActivityLog[]> => {
                 const activityQuery = query(
                     collection(db, 'activityLog'),
@@ -230,7 +260,6 @@ export const getAdminDashboardData = async (
                 return activityData;
             })(),
 
-            // --- Obtener Tareas Asignadas al Admin (sin cambios) ---
             getCurrentUserTasks(adminUserId).then((tasks) => {
                 console.log(
                     `[AdminService] ✅ Obtenidas ${tasks.length} tareas asignadas al admin.`
@@ -239,19 +268,17 @@ export const getAdminDashboardData = async (
             }),
         ]);
 
-        // 3. Ensamblar el objeto final
-        const dashboardData: AdminDashboardData = {
+        const dashboardData: AdminDashboardData = serializeForClient({
             team: teamData,
             members,
-            projects, // ✨ Esta propiedad ahora contiene el desglose 'taskCounts'
+            projects,
             tasks,
             recentActivity,
             adminAssignedTasks,
-        };
+        });
 
         console.log(
-            `[AdminService] 🚀 Ensamblaje de datos del dashboard de admin completado.`,
-            //       dashboardData // Comentado para evitar spam masivo en consola
+            `[AdminService] 🚀 Ensamblaje de datos del dashboard de admin completado.`
         );
         return dashboardData;
     } catch (error) {

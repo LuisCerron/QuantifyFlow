@@ -1,20 +1,18 @@
 "use client";
 
 import Link from 'next/link';
-// 👇 Importa los tipos actualizados
 import { Project, TeamMemberRol } from '@/types';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-// 👇 Importa todos los iconos necesarios
 import {
   Archive,
   Loader2,
   ArrowUpRight,
-  Circle,         // Para 'todo'
-  PlayCircle,     // Para 'in-progress'
-  CheckCircle2    // Para 'done'
+  Circle,
+  PlayCircle,
+  CheckCircle2
 } from 'lucide-react';
-import { useState, MouseEvent } from 'react';
+import { useState, memo, useMemo, useCallback } from 'react';
 
 // (Asegúrate de tener este componente de Badge disponible o cópialo de tu otro archivo)
 const StatusBadge = ({ status }: { status?: string }) => {
@@ -48,36 +46,34 @@ interface ProjectCardProps {
   onArchive?: (projectId: string) => Promise<void>;
 }
 
-export function ProjectCard({ project, userRole, onArchive }: ProjectCardProps) {
+const ProjectCard = memo(function ProjectCard({ project, userRole, onArchive }: ProjectCardProps) {
   const [isArchiving, setIsArchiving] = useState(false);
 
-  // --- Lógica de Progreso (de Card 1) ---
-  // Usamos los datos del 'project.taskCounts'
   const counts = project.taskCounts;
-  const showProgress = counts && counts.all > 0;
-  const percent = showProgress ? Math.round((counts.done / counts.all) * 100) : 0;
-
-  // --- Lógica de Botones (de Card 2) ---
+  const showProgress = useMemo(() => counts && counts.all > 0, [counts]);
+  const percent = useMemo(() => showProgress ? Math.round((counts!.done / counts!.all) * 100) : 0, [showProgress, counts]);
+  const gradientColor = useMemo(() => getProjectColor(project.name), [project.name]);
+  
   const showArchiveButton = userRole === 'admin' && !!onArchive;
-  const showFooterButtons = !!onArchive; // Mostramos footer si 'onArchive' (o 'userRole') se pasa
+  const showFooterButtons = !!onArchive;
 
-  const handleArchive = async (e: MouseEvent<HTMLButtonElement>) => {
+  const handleArchive = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     if (isArchiving) return;
 
     setIsArchiving(true);
     try {
-      await onArchive!(project.id); // '!' es seguro gracias a 'showArchiveButton'
+      await onArchive!(project.id);
     } catch (error) {
       console.error("Error al archivar el proyecto:", error);
       setIsArchiving(false);
     }
-  };
+  }, [isArchiving, onArchive, project.id]);
 
   return (
     <Card className="group relative h-full flex flex-col transition-all duration-300 hover:shadow-lg hover:-translate-y-1 border-border/50 overflow-hidden">
       {/* Gradient accent */}
-      <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${getProjectColor(project.name)}`} />
+      <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${gradientColor}`} />
 
       <CardHeader className="p-5 pb-3 space-y-3">
         <div className="flex items-start justify-between">
@@ -175,4 +171,6 @@ export function ProjectCard({ project, userRole, onArchive }: ProjectCardProps) 
       <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
     </Card>
   );
-}
+});
+
+export default ProjectCard

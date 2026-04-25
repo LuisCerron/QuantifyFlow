@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import { getProjectById } from "@/services/projectService"; // 1. Importar el servicio
 import { Project, User, Tag } from "@/types"; // 2. Importar el tipo Project
 import { Button } from "@/components/ui/button"; // Importar para el nuevo botón
-import { Search, Plus, User as UserIcon, Tag as TagIcon, X, Link2, Settings, Loader2, ArchiveIcon } from "lucide-react";
+import { Search, Plus, User as UserIcon, Tag as TagIcon, X, Link2, Settings, Loader2, ArchiveIcon, GitGraph } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Command,
@@ -186,6 +186,15 @@ export default function ProjectHeader({
             <Link href={`/projects/${projectId}/archive`}>
               <ArchiveIcon className="h-5 w-5" />
               <span className="sr-only">Tareas Archivadas</span>
+            </Link>
+          </Button>
+          {/* --- Fin del botón/link --- */}
+
+          {/* --- 👇 CAMBIO: Añadir botón/link a Dependencias --- */}
+          <Button variant="outline" size="icon" asChild title="Ver grafo de dependencias">
+            <Link href={`/projects/${projectId}/dependencies`}>
+              <GitGraph className="h-5 w-5" />
+              <span className="sr-only">Dependencias</span>
             </Link>
           </Button>
           {/* --- Fin del botón/link --- */}

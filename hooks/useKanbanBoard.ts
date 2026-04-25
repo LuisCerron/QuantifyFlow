@@ -4,14 +4,16 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DropResult } from "react-beautiful-dnd";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { toDateSafe } from "@/lib/utils/date";
 
-// Servicios (asegúrate de que estas funciones devuelvan los datos enriquecidos)
 import {
   getProjectTasks,
   updateTaskStatus,
   getTeamMembersForFilter,
   updateSubtaskCompletion,
+  canMoveTask,
 } from "@/services/kanbanService";
+import { toast } from "sonner";
 
 import type { TaskWithDetails, User, Tag, Subtask } from "@/types";
 import { useAuth } from "@/context/AuthContext";
@@ -40,28 +42,6 @@ const sortByDueDateThenTitle = (a: TaskWithDetails, b: TaskWithDetails) => {
   return a.title.localeCompare(b.title);
 };
 
-// Fecha robusta (Date | Timestamp | string | number | {seconds,nanoseconds})
-function toDateSafe(value: any): Date | null {
-  if (!value) return null;
-  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
-  if (typeof value?.toDate === "function") {
-    try {
-      const d = value.toDate();
-      return isNaN(d.getTime()) ? null : d;
-    } catch {
-      return null;
-    }
-  }
-  if (typeof value === "object" && "seconds" in value) {
-    const s = Number(value.seconds);
-    const n = Number(value.nanoseconds ?? 0);
-    const d = new Date(s * 1000 + Math.floor(n / 1e6));
-    return isNaN(d.getTime()) ? null : d;
-  }
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
-}
-
 export const useKanbanBoard = (projectId: string, teamId: string) => {
   const { user } = useAuth();
 
@@ -78,6 +58,9 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [assignedUserFilter, setAssignedUserFilter] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
+
+  // Dependencias entre tareas
+  const [dependencyMap, setDependencyMap] = useState<Map<string, { blockedBy: number; blocking: number; isBlocked: boolean }>>(new Map());
 
   // Para evitar condiciones de carrera al refrescar rápidamente
   const fetchIdRef = useRef(0);
@@ -203,8 +186,41 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
     return base;
   }, [filteredTasks]);
 
-  const handleDragEnd = useCallback(  
-    (result: DropResult) => {
+  useEffect(() => {
+    if (!projectId || !teamId) return;
+
+    const loadDependencies = async () => {
+      const taskIds = Object.values(filteredTasks).flat().map((t) => t.id);
+      if (taskIds.length === 0) return;
+
+      const { getProjectDependencies } = await import("@/services/dependencyService");
+      const allDeps = await getProjectDependencies(projectId);
+
+      const map = new Map<string, { blockedBy: number; blocking: number; isBlocked: boolean }>();
+      taskIds.forEach((id) => {
+        const blockedBy = allDeps.filter((d) => d.toTaskId === id && d.type === "blocks");
+        const blocking = allDeps.filter((d) => d.fromTaskId === id && d.type === "blocks");
+
+        const activeBlockers = blockedBy.filter((dep) => {
+          const task = Object.values(filteredTasks).flat().find((t) => t.id === dep.fromTaskId);
+          return task?.status !== "done";
+        });
+
+        map.set(id, {
+          blockedBy: activeBlockers.length,
+          blocking: blocking.length,
+          isBlocked: activeBlockers.length > 0,
+        });
+      });
+
+      setDependencyMap(map);
+    };
+
+    loadDependencies();
+  }, [projectId, teamId, filteredTasks]);
+
+  const handleDragEnd = useCallback(
+    async (result: DropResult) => {
       const { destination, source, draggableId } = result;
       if (!destination || !user) return;
 
@@ -213,6 +229,27 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
 
       if (from === to && destination.index === source.index) return;
       if (from === to) return; // mismo estado, nada que hacer
+
+      // Check dependency constraints before allowing move
+      if (to !== "todo") {
+        const statusMap = new Map<string, string>();
+        Object.values(filteredTasks).flat().forEach((t) => statusMap.set(t.id, t.status));
+
+        const { allowed, blockedBy } = await canMoveTask(draggableId, to, statusMap);
+
+        if (!allowed) {
+          const blockerTitles = blockedBy?.map((id) => {
+            const task = Object.values(filteredTasks).flat().find((t) => t.id === id);
+            return task?.title || "Unknown task";
+          }) || [];
+
+          toast.error(
+            `Cannot move: blocked by ${blockerTitles.join(", ")}`,
+            { description: "Complete blocking tasks first" }
+          );
+          return; // Cancel the drag
+        }
+      }
 
       // Optimistic UI
       setTasks((prev) =>
@@ -228,7 +265,7 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
         );
       });
     },
-    [teamId, user]
+    [teamId, user, filteredTasks]
   );
 
   const handleSubtaskToggle = useCallback(
@@ -310,8 +347,10 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
   return {
     // tablero
     columns,
+    allTasks: tasks,
     isLoading,
     error,
+    dependencyMap,
 
     // acciones
     handleDragEnd,

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import {
   collection,
   query,
@@ -71,13 +71,13 @@ export function useTeamManagement(userId: string | null) {
           createdAt: new Date(),
           updatedAt: new Date(),
         }
-        setTeams([...teams, newTeam])
+        setTeams((prev) => [...prev, newTeam])
         return newTeam
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to create team"))
       }
     },
-    [userId, teams],
+    [userId],
   )
 
   const updateTeam = useCallback(
@@ -87,25 +87,31 @@ export function useTeamManagement(userId: string | null) {
           ...updates,
           updatedAt: Timestamp.now(),
         })
-        setTeams(teams.map((t) => (t.id === teamId ? { ...t, ...updates } : t)))
+        setTeams((prev) => prev.map((t) => (t.id === teamId ? { ...t, ...updates } : t)))
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to update team"))
       }
     },
-    [teams],
+    [],
   )
 
   const deleteTeam = useCallback(
     async (teamId: string) => {
       try {
         await deleteDoc(doc(db, "teams", teamId))
-        setTeams(teams.filter((t) => t.id !== teamId))
+        setTeams((prev) => prev.filter((t) => t.id !== teamId))
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to delete team"))
       }
     },
-    [teams],
+    [],
   )
+
+  useEffect(() => {
+    if (userId) {
+      fetchUserTeams()
+    }
+  }, [userId, fetchUserTeams])
 
   return { teams, loading, error, fetchUserTeams, createTeam, updateTeam, deleteTeam }
 }

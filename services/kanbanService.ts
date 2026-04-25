@@ -14,84 +14,145 @@ import {
   orderBy,
   deleteField,
 } from 'firebase/firestore';
-import type { Task, Subtask, Tag, User, ActivityLog, TaskWithDetails } from '@/types';
+import type { Task, Subtask, Tag, User, TaskWithDetails } from '@/types';
+import { chunkArray } from '@/lib/utils/helpers';
+import { logActivity, ActivityAction } from './activityLogService';
+import { getBlockedByTasks, hasDependents } from './dependencyService';
 
-// Helper para crear logs de actividad
-const createActivityLog = async (logData: Omit<ActivityLog, 'id' | 'createdAt'>) => {
-  try {
-    await addDoc(collection(db, 'activityLog'), {
-      ...logData,
-      createdAt: Timestamp.now(),
-    });
-  } catch (error) {
-    console.error("Error creating activity log:", error);
+const FIREBASE_IN_LIMIT = 10;
+
+function serializeForClient<T extends Record<string, any>>(data: T): T {
+  const serialized = { ...data } as Record<string, any>;
+  
+  for (const key in serialized) {
+    const value = serialized[key];
+    
+    if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
+      serialized[key] = value.toDate().toISOString();
+    }
+    else if (value && typeof value === 'object' && 'seconds' in value && 'nanoseconds' in value) {
+      serialized[key] = new Date(value.seconds * 1000).toISOString();
+    }
+    else if (Array.isArray(value)) {
+      serialized[key] = value.map((item: any) => 
+        typeof item === 'object' && item !== null ? serializeForClient(item) : item
+      );
+    }
+    else if (value && typeof value === 'object' && value !== null && !('toDate' in value) && !('seconds' in value)) {
+      serialized[key] = serializeForClient(value);
+    }
   }
-};
+  
+  return serialized as T;
+}
 
-// Obtiene todas las tareas y sus detalles para un proyecto específico
+async function batchFetchSubtasks(taskIds: string[]): Promise<Map<string, Subtask[]>> {
+  const subtasksByTaskId = new Map<string, Subtask[]>();
+  if (taskIds.length === 0) return subtasksByTaskId;
+
+  const chunks = chunkArray(taskIds, FIREBASE_IN_LIMIT);
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      const q = query(collection(db, 'subtasks'), where('taskId', 'in', chunk));
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach((d) => {
+        const taskId = d.data().taskId;
+        if (!subtasksByTaskId.has(taskId)) subtasksByTaskId.set(taskId, []);
+        subtasksByTaskId.get(taskId)!.push({ id: d.id, ...d.data() } as Subtask);
+      });
+    })
+  );
+  return subtasksByTaskId;
+}
+
+async function batchFetchTags(taskIds: string[]): Promise<Map<string, Tag[]>> {
+  const tagsByTaskId = new Map<string, Tag[]>();
+  if (taskIds.length === 0) return tagsByTaskId;
+
+  const taskTagsByTaskId = new Map<string, string[]>();
+  
+  const chunks = chunkArray(taskIds, FIREBASE_IN_LIMIT);
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      const q = query(collection(db, 'taskTags'), where('taskId', 'in', chunk));
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach((d) => {
+        const { taskId, tagId } = d.data();
+        if (!taskTagsByTaskId.has(taskId)) taskTagsByTaskId.set(taskId, []);
+        taskTagsByTaskId.get(taskId)!.push(tagId);
+      });
+    })
+  );
+
+  const allTagIds = [...new Set([...taskTagsByTaskId.values()].flat())];
+  if (allTagIds.length === 0) return tagsByTaskId;
+
+  const tagCache = new Map<string, Tag>();
+  const tagIdChunks = chunkArray(allTagIds, FIREBASE_IN_LIMIT);
+  await Promise.all(
+    tagIdChunks.map(async (chunk) => {
+      const q = query(collection(db, 'tags'), where('__name__', 'in', chunk));
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach((d) => {
+        tagCache.set(d.id, { id: d.id, ...d.data() } as Tag);
+      });
+    })
+  );
+
+  taskTagsByTaskId.forEach((tagIds, taskId) => {
+    const tags = tagIds.map((tagId) => tagCache.get(tagId)).filter(Boolean) as Tag[];
+    tagsByTaskId.set(taskId, tags);
+  });
+
+  return tagsByTaskId;
+}
+
+async function batchFetchUsers(userIds: string[]): Promise<Record<string, User>> {
+  const users: Record<string, User> = {};
+  if (userIds.length === 0) return users;
+
+  const uniqueIds = [...new Set(userIds)];
+  const chunks = chunkArray(uniqueIds, FIREBASE_IN_LIMIT);
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      const q = query(collection(db, 'users'), where('__name__', 'in', chunk));
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach((d) => {
+        users[d.id] = { uid: d.id, ...d.data() } as User;
+      });
+    })
+  );
+  return users;
+}
+
 export const getProjectTasks = async (projectId: string, teamId: string): Promise<TaskWithDetails[]> => {
   const tasksQuery = query(
     collection(db, 'tasks'), 
     where('projectId', '==', projectId),
-    where('isArchived', '==', false) // 👈 AÑADE ESTA LÍNEA
+    where('isArchived', '==', false)
   );
-  const tasksSnapshot = await getDocs(tasksQuery);
+  const tasksSnapshot = await getDocs(tasksQuery);
   const tasks: Task[] = tasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
 
-  // Optimización: Recolectar todos los IDs para hacer menos consultas
-  const userIds = new Set<string>();
-  tasks.forEach(task => {
-    // 👈 CAMBIO: Iterar sobre el array de IDs
-    task.assignedToIds?.forEach(id => userIds.add(id)); 
-  });
+  if (tasks.length === 0) return [];
 
-  let users: Record<string, User> = {};
-  if (userIds.size > 0) {
-    // 👇 CAMBIO (y CORRECCIÓN): Usar '__name__' para consultar por Document ID.
-    // 'uid' es un campo, pero los IDs de asignación suelen ser los IDs del documento.
-    const usersQuery = query(collection(db, 'users'), where('__name__', 'in', Array.from(userIds)));
-    const usersSnapshot = await getDocs(usersQuery);
-    usersSnapshot.forEach(doc => {
-      // 👈 CAMBIO: Asegurar que el uid esté en el objeto (usando el doc.id)
-      users[doc.id] = { uid: doc.id, ...doc.data() } as User; 
-    });
-  }
+  const taskIds = tasks.map(t => t.id);
+  const userIds = tasks.flatMap(t => t.assignedToIds || []);
 
-  // Obtener subtareas, etiquetas para cada tarea
-  const tasksWithDetails = await Promise.all(
-    tasks.map(async (task) => {
-      // ... (la lógica de subtareas y tags no cambia) ...
-      const subtasksQuery = query(collection(db, 'subtasks'), where('taskId', '==', task.id));
-      const subtasksSnapshot = await getDocs(subtasksQuery);
-      const subtasks = subtasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Subtask));
+  const [users, subtasksByTaskId, tagsByTaskId] = await Promise.all([
+    batchFetchUsers(userIds),
+    batchFetchSubtasks(taskIds),
+    batchFetchTags(taskIds),
+  ]);
 
-      const taskTagsQuery = query(collection(db, 'taskTags'), where('taskId', '==', task.id));
-      const taskTagsSnapshot = await getDocs(taskTagsQuery);
-      const tagIds = taskTagsSnapshot.docs.map(doc => doc.data().tagId);
-      
-      let tags: Tag[] = [];
-      if (tagIds.length > 0) {
-        const tagsQuery = query(collection(db, 'tags'), where('__name__', 'in', tagIds));
-        const tagsSnapshot = await getDocs(tagsQuery);
-        tags = tagsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tag));
-      }
-      
-      return {
-        ...task,
-        // 👇 CAMBIO: Mapear el array de IDs a un array de objetos User
-        assignedTo: task.assignedToIds
-          ? task.assignedToIds.map(id => users[id]).filter(Boolean) // .filter(Boolean) elimina nulos si un usuario no se encontró
-          : [], // Devolver un array vacío si no hay asignados
-        subtasks,
-        tags,
-      };
-    })
-  );
-
-  return tasksWithDetails;
+  return tasks.map(task => serializeForClient({
+    ...task,
+    assignedTo: (task.assignedToIds || []).map(id => users[id]).filter(Boolean),
+    subtasks: subtasksByTaskId.get(task.id) || [],
+    tags: tagsByTaskId.get(task.id) || [],
+  }));
 };
 
-// Actualiza el estado de una tarea (usado para Drag-and-Drop)
 export const updateTaskStatus = async (
   taskId: string,
   newStatus: 'todo' | 'in-progress' | 'done',
@@ -101,16 +162,15 @@ export const updateTaskStatus = async (
   const taskRef = doc(db, 'tasks', taskId);
   await updateDoc(taskRef, { status: newStatus, updatedAt: Timestamp.now() });
 
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: 'Cambio el estado de una tarea',
+    action: ActivityAction.TASK_MOVED,
     details: { newStatus },
   });
 };
 
-// Actualiza una subtarea y verifica si la tarea principal debe completarse
 export const updateSubtaskCompletion = async (
   subtaskId: string,
   taskId: string,
@@ -121,19 +181,16 @@ export const updateSubtaskCompletion = async (
   const subtaskRef = doc(db, 'subtasks', subtaskId);
   const taskRef = doc(db, 'tasks', taskId);
 
-  // 1. Actualizar la subtarea
   await updateDoc(subtaskRef, { completed });
 
-  // 2. Crear el log de la subtarea
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: completed ? 'Subtarea hecha' : 'Subtarea reabierta',
+    action: completed ? ActivityAction.SUBTASK_COMPLETED : ActivityAction.SUBTASK_UNCOMPLETED,
     details: { subtaskId }
   });
 
-  // --- 3. Lógica de recalculo de estado ---
   const subtasksQuery = query(collection(db, 'subtasks'), where('taskId', '==', taskId));
   const subtasksSnapshot = await getDocs(subtasksQuery);
   
@@ -144,23 +201,18 @@ export const updateSubtaskCompletion = async (
   let newStatus: 'todo' | 'in-progress' | 'done';
 
   if (totalSubtasks === 0 || completedSubtasks === 0) {
-    // Si no hay subtareas, o ninguna está completa
     newStatus = 'todo';
   } else if (completedSubtasks === totalSubtasks) {
-    // Si todas están completas
     newStatus = 'done';
   } else {
-    // Si algunas (pero no todas) están completas
     newStatus = 'in-progress';
   }
 
-  // 4. Actualizar la tarea principal SÓLO SI el estado cambió
   const taskSnap = await getDoc(taskRef);
   if (taskSnap.exists()) {
     const currentStatus = taskSnap.data().status;
     
     if (currentStatus !== newStatus) {
-      // Usamos tu función existente para que también genere el log de "status_change"
       await updateTaskStatus(taskId, newStatus, userId, teamId);
     }
   }
@@ -174,10 +226,8 @@ export const getTeamMembersForFilter = async (teamId: string): Promise<User[]> =
 
   if (userIds.length === 0) return [];
 
-  const usersQuery = query(collection(db, "users"), where("uid", "in", userIds));
-  const usersSnap = await getDocs(usersQuery);
-
-  return usersSnap.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User));
+  const users = await batchFetchUsers(userIds);
+  return Object.values(users);
 }
 
 
@@ -191,12 +241,12 @@ export const createTask = async (taskData: CreateTaskData): Promise<string> => {
   const taskRef = doc(collection(db, 'tasks'));
 
   batch.set(taskRef, {
-    ...taskData,
-    status: 'todo',
-    isArchived: false, // 👈 AÑADE ESTA LÍNEA
-    createdAt: Timestamp.now(),
-    updatedAt: Timestamp.now(),
-  });
+    ...taskData,
+    status: 'todo',
+    isArchived: false,
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
 
   taskData.subtaskTitles?.forEach(title => {
     if (title.trim() === '') return;
@@ -211,11 +261,12 @@ export const createTask = async (taskData: CreateTaskData): Promise<string> => {
 
   await batch.commit();
 
-  await createActivityLog({
+  await logActivity({
     taskId: taskRef.id,
     teamId: taskData.teamId,
+    projectId: taskData.projectId,
     userId: taskData.createdBy,
-    action: 'Tarea creada',
+    action: ActivityAction.TASK_CREATED,
     details: { title: taskData.title },
   });
 
@@ -232,11 +283,12 @@ export const updateTask = async (
   const taskRef = doc(db, 'tasks', taskId);
   await updateDoc(taskRef, { ...updates, updatedAt: Timestamp.now() });
 
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
+    projectId: updates.projectId,
     userId,
-    action: 'Tarea actualizada',
+    action: ActivityAction.TASK_UPDATED,
     details: { updatedFields: Object.keys(updates) },
   });
 };
@@ -257,11 +309,11 @@ export const deleteTask = async (taskId: string, userId: string, teamId: string)
 
   await batch.commit();
 
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: 'Tarea eliminada',
+    action: ActivityAction.TASK_DELETED,
   });
 };
 
@@ -274,11 +326,11 @@ export const addSubtask = async (taskId: string, title: string, userId: string, 
     createdAt: Timestamp.now(),
   });
 
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: 'Subtarea añadida',
+    action: ActivityAction.SUBTASK_CREATED,
     details: { title },
   });
 
@@ -288,11 +340,11 @@ export const addSubtask = async (taskId: string, title: string, userId: string, 
 export const removeSubtask = async (subtaskId: string, taskId: string, userId: string, teamId: string) => {
   await deleteDoc(doc(db, 'subtasks', subtaskId));
 
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: 'Subtarea eliminada',
+    action: ActivityAction.SUBTASK_DELETED,
     details: { subtaskId },
   });
 };
@@ -311,14 +363,15 @@ export const setTaskTags = async (taskId: string, newTagIds: string[], userId: s
 
   await batch.commit();
 
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: 'Tags de tarea actualizados',
+    action: ActivityAction.TAGS_UPDATED,
     details: { newTagIds },
   });
 };
+
 export const updateSubtaskTitle = async (
   subtaskId: string,
   newTitle: string,
@@ -332,14 +385,15 @@ export const updateSubtaskTitle = async (
   const subtaskRef = doc(db, 'subtasks', subtaskId);
   await updateDoc(subtaskRef, { title: newTitle });
 
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: 'Subtarea actualizada',
+    action: ActivityAction.SUBTASK_UPDATED,
     details: { subtaskId, newTitle },
   });
 };
+
 export const updateSubtaskStatus = async (
   taskId: string,
   subtaskId: string,
@@ -348,126 +402,67 @@ export const updateSubtaskStatus = async (
   try {
     const batch = writeBatch(db);
 
-    // Referencia al documento de la tarea padre (esto sigue siendo correcto)
     const taskRef = doc(db, "tasks", taskId);
-
-    // --- CORRECCIÓN AQUÍ ---
-    // Apunta a la colección raíz 'subtasks' usando el ID de la subtarea
     const subtaskRef = doc(db, "subtasks", subtaskId);
 
-    // 1. Actualiza el campo 'completed' de la subtarea
     batch.update(subtaskRef, { completed });
-
-    // 2. Actualiza el campo 'updatedAt' de la tarea padre para reflejar el cambio
     batch.update(taskRef, { updatedAt: new Date() });
 
-    // Ejecuta ambas operaciones de forma atómica
     await batch.commit();
     console.log(`Subtarea ${subtaskId} actualizada a: ${completed}`);
   } catch (error) {
     console.error("Error al actualizar la subtarea:", error);
-    // Relanza el error para que el componente pueda manejarlo
     throw new Error("No se pudo actualizar el estado de la subtarea.");
   }
 };
 
 export const enrichTaskWithDetails = async (task: Task, usersCache: Record<string, User>): Promise<TaskWithDetails> => {
-  // 1. Obtener subtareas
-  const subtasksQuery = query(collection(db, 'subtasks'), where('taskId', '==', task.id));
-  
-  // 2. Obtener IDs de etiquetas
-  const taskTagsQuery = query(collection(db, 'taskTags'), where('taskId', '==', task.id));
-
-  // ... (el resto de la lógica de Promise.all, subtareas y tags no cambia) ...
   const [subtasksSnapshot, taskTagsSnapshot] = await Promise.all([
-    getDocs(subtasksQuery),
-    getDocs(taskTagsQuery)
+    getDocs(query(collection(db, 'subtasks'), where('taskId', '==', task.id))),
+    getDocs(query(collection(db, 'taskTags'), where('taskId', '==', task.id)))
   ]);
 
   const subtasks = subtasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Subtask));
   const tagIds = taskTagsSnapshot.docs.map(doc => doc.data().tagId);
 
-  let tags: Tag[] = [];
-  if (tagIds.length > 0) {
-    const tagsQuery = query(collection(db, 'tags'), where('__name__', 'in', tagIds));
-    const tagsSnapshot = await getDocs(tagsQuery);
-    tags = tagsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tag));
-  }
-  
-  // 4. Construir y devolver el objeto completo
-  return {
+  const tags = tagIds.length > 0 
+    ? (await batchFetchTags([task.id])).get(task.id) || []
+    : [];
+
+  return serializeForClient({
     ...task,
-    // 👇 CAMBIO: Mapear el array de IDs a un array de objetos User desde el caché
-    assignedTo: task.assignedToIds
-      ? task.assignedToIds.map(id => usersCache[id]).filter(Boolean)
-      : [],
+    assignedTo: (task.assignedToIds || []).map(id => usersCache[id]).filter(Boolean),
     subtasks,
     tags,
-  };
+  });
 };
+
 export const getCurrentUserTasks = async (userId: string): Promise<TaskWithDetails[]> => {
   const tasksQuery = query(
     collection(db, 'tasks'), 
     where('assignedToIds', 'array-contains', userId),
-    where('isArchived', '==', false) // 👈 AÑADE ESTA LÍNEA
+    where('isArchived', '==', false)
   ); 
-  const tasksSnapshot = await getDocs(tasksQuery);
+  const tasksSnapshot = await getDocs(tasksQuery);
   const tasks: Task[] = tasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
 
-  if (tasks.length === 0) {
-    return [];
-  }
+  if (tasks.length === 0) return [];
 
-  // 2. Obtener los datos de TODOS los usuarios asignados a estas tareas (no solo el actual)
-  // 👇 CAMBIO: Lógica de recolección de todos los IDs
-  const userIds = new Set<string>();
-  tasks.forEach(task => {
-    task.assignedToIds?.forEach(id => userIds.add(id));
-  });
+  const taskIds = tasks.map(t => t.id);
+  const userIds = tasks.flatMap(t => t.assignedToIds || []);
 
-  let usersCache: Record<string, User> = {};
-  if (userIds.size > 0) {
-    // 👇 CAMBIO: Obtener todos los usuarios necesarios (usando __name__ para IDs de documento)
-    const usersQuery = query(collection(db, 'users'), where('__name__', 'in', Array.from(userIds)));
-    const usersSnapshot = await getDocs(usersQuery);
-    usersSnapshot.forEach(doc => {
-      usersCache[doc.id] = { uid: doc.id, ...doc.data() } as User;
-    });
-  }
+  const [users, subtasksByTaskId, tagsByTaskId] = await Promise.all([
+    batchFetchUsers(userIds),
+    batchFetchSubtasks(taskIds),
+    batchFetchTags(taskIds),
+  ]);
 
-  // 3. Para cada tarea, obtener sus subtareas y etiquetas
-  const tasksWithDetails = await Promise.all(
-    tasks.map(async (task) => {
-      // ... (la lógica de subtareas y tags no cambia) ...
-      const subtasksQuery = query(collection(db, 'subtasks'), where('taskId', '==', task.id));
-      const subtasksSnapshot = await getDocs(subtasksQuery);
-      const subtasks = subtasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Subtask));
-
-      const taskTagsQuery = query(collection(db, 'taskTags'), where('taskId', '==', task.id));
-      const taskTagsSnapshot = await getDocs(taskTagsQuery);
-      const tagIds = taskTagsSnapshot.docs.map(doc => doc.data().tagId);
-
-      let tags: Tag[] = [];
-      if (tagIds.length > 0) {
-        const tagsQuery = query(collection(db, 'tags'), where('__name__', 'in', tagIds));
-        const tagsSnapshot = await getDocs(tagsQuery);
-        tags = tagsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tag));
-      }
-      
-      // 4. Combinar toda la información en un solo objeto.
-      return {
-        ...task,
-        // 👇 CAMBIO: Mapear el array de IDs a un array de Users
-        assignedTo: task.assignedToIds
-          ? task.assignedToIds.map(id => usersCache[id]).filter(Boolean)
-          : [],
-        subtasks,
-        tags,
-      };
-    })
-  );
-
-  return tasksWithDetails;
+  return tasks.map(task => serializeForClient({
+    ...task,
+    assignedTo: (task.assignedToIds || []).map(id => users[id]).filter(Boolean),
+    subtasks: subtasksByTaskId.get(task.id) || [],
+    tags: tagsByTaskId.get(task.id) || [],
+  }));
 };
 
 export const archiveTask = async (
@@ -483,12 +478,11 @@ export const archiveTask = async (
     archivedBy: userId
   });
 
-  // Log de actividad opcional pero recomendado
-  await createActivityLog({
+  await logActivity({
     taskId,
     teamId,
     userId,
-    action: 'Tarea archivada',
+    action: ActivityAction.TASK_ARCHIVED,
   });
 };
 
@@ -497,89 +491,46 @@ export const getArchivedTasks = async (projectId: string, teamId: string): Promi
   const tasksQuery = query(
     collection(db, 'tasks'),
     where('projectId', '==', projectId),
-    where('isArchived', '==', true), // 👈 Solo las archivadas
-    orderBy('archivedAt', 'desc')    // 👈 Ordenar por fecha de archivo
+    where('isArchived', '==', true),
+    orderBy('archivedAt', 'desc')
   );
 
   const tasksSnapshot = await getDocs(tasksQuery);
   const tasks: Task[] = tasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
   console.log(`[getArchivedTasks] ${tasks.length} tareas archivadas encontradas.`);
 
-  if (tasks.length === 0) {
-    return [];
-  }
+  if (tasks.length === 0) return [];
 
-  // --- Lógica de Enriquecimiento (similar a getProjectTasks) ---
+  const taskIds = tasks.map(t => t.id);
+  const userIds = [...new Set(tasks.flatMap(t => [...(t.assignedToIds || []), t.archivedBy || []]).flat())];
 
-  // 1. Recolectar IDs de usuarios (asignados Y quien archivó)
-  const userIds = new Set<string>();
-  tasks.forEach(task => {
-    task.assignedToIds?.forEach(id => userIds.add(id));
-    if (task.archivedBy) { // Añadir el ID de quien archivó
-      userIds.add(task.archivedBy);
-    }
-  });
-  console.log(`[getArchivedTasks] IDs de usuarios a buscar: ${Array.from(userIds)}`);
+  const [users, subtasksByTaskId, tagsByTaskId] = await Promise.all([
+    batchFetchUsers(userIds),
+    batchFetchSubtasks(taskIds),
+    batchFetchTags(taskIds),
+  ]);
 
-  // 2. Obtener datos de usuarios
-  let usersCache: Record<string, User> = {};
-  if (userIds.size > 0) {
-    const usersQuery = query(collection(db, 'users'), where('__name__', 'in', Array.from(userIds)));
-    const usersSnapshot = await getDocs(usersQuery);
-    usersSnapshot.forEach(doc => {
-      usersCache[doc.id] = { uid: doc.id, ...doc.data() } as User;
-    });
-     console.log(`[getArchivedTasks] ${Object.keys(usersCache).length} usuarios encontrados.`);
-  }
-
-  // 3. Enriquecer cada tarea con subtareas, etiquetas y usuarios
-  const tasksWithDetails = await Promise.all(
-    tasks.map(async (task) => {
-      // Obtener subtareas
-      const subtasksQuery = query(collection(db, 'subtasks'), where('taskId', '==', task.id));
-      const subtasksSnapshot = await getDocs(subtasksQuery);
-      const subtasks = subtasksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Subtask));
-
-      // Obtener etiquetas
-      const taskTagsQuery = query(collection(db, 'taskTags'), where('taskId', '==', task.id));
-      const taskTagsSnapshot = await getDocs(taskTagsQuery);
-      const tagIds = taskTagsSnapshot.docs.map(doc => doc.data().tagId);
-
-      let tags: Tag[] = [];
-      if (tagIds.length > 0) {
-        const tagsQuery = query(collection(db, 'tags'), where('__name__', 'in', tagIds));
-        const tagsSnapshot = await getDocs(tagsQuery);
-        tags = tagsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tag));
-      }
-
-      // Devolver objeto enriquecido
-      return {
-        ...task,
-        assignedTo: task.assignedToIds // Usuarios asignados
-          ? task.assignedToIds.map(id => usersCache[id]).filter(Boolean)
-          : [],
-        archivedByUser: task.archivedBy ? usersCache[task.archivedBy] : undefined, // 👈 Usuario que archivó
-        subtasks,
-        tags,
-      } as TaskWithDetails; // Asegúrate que TaskWithDetails incluya archivedByUser opcional
-    })
-  );
   console.log(`[getArchivedTasks] Enriquecimiento completo.`);
-  return tasksWithDetails;
+  return tasks.map(task => serializeForClient({
+    ...task,
+    assignedTo: (task.assignedToIds || []).map(id => users[id]).filter(Boolean),
+    archivedByUser: task.archivedBy ? users[task.archivedBy] : undefined,
+    subtasks: subtasksByTaskId.get(task.id) || [],
+    tags: tagsByTaskId.get(task.id) || [],
+  } as TaskWithDetails));
 };
 
 export const archiveAllDoneTasks = async (
   projectId: string,
-  userId: string, // Quién está realizando la acción
-  teamId: string  // Para el log de actividad
+  userId: string,
+  teamId: string
 ): Promise<{ archivedCount: number }> => {
   
-  // 1. Encontrar las tareas a archivar
   const tasksToArchiveQuery = query(
     collection(db, 'tasks'),
     where('projectId', '==', projectId),
     where('status', '==', 'done'),
-    where('isArchived', '==', false) // Solo las que NO están ya archivadas
+    where('isArchived', '==', false)
   );
 
   const querySnapshot = await getDocs(tasksToArchiveQuery);
@@ -587,22 +538,18 @@ export const archiveAllDoneTasks = async (
 
   if (tasksToArchive.length === 0) {
     console.log("[archiveAllDoneTasks] No hay tareas completadas para archivar.");
-    return { archivedCount: 0 }; // Nada que hacer
+    return { archivedCount: 0 };
   }
 
-  // 2. Preparar el batch de actualización
-  // Firestore limita los batches a 500 operaciones. Si esperas tener más,
-  // necesitarías dividir esto en múltiples batches. Por ahora, asumimos < 500.
   if (tasksToArchive.length >= 500) {
      console.warn("[archiveAllDoneTasks] Se encontraron más de 499 tareas para archivar. Solo se procesarán las primeras 499.");
-     // Considera implementar lógica de paginación o múltiples batches si esto es común.
   }
   
   const batch = writeBatch(db);
   let count = 0;
 
   for (const taskDoc of tasksToArchive) {
-     if (count >= 499) break; // Límite de seguridad del batch
+     if (count >= 499) break;
      const taskRef = doc(db, 'tasks', taskDoc.id);
      batch.update(taskRef, {
         isArchived: true,
@@ -612,47 +559,82 @@ export const archiveAllDoneTasks = async (
      count++;
   }
 
-  // 3. Ejecutar el batch
   await batch.commit();
 
-  // 4. (Opcional pero recomendado) Crear un log de actividad general
-  // Podrías crear un log por cada tarea, pero para una acción masiva,
-  // uno general puede ser suficiente
-  
-  await createActivityLog({
-     projectId, // Log a nivel de proyecto
+  await logActivity({
+     projectId,
      teamId,
      userId,
-     action: 'Archivado masivo de tareas completadas',
+     action: ActivityAction.BULK_ARCHIVE,
      details: { count },
   });
-  
 
   console.log(`[archiveAllDoneTasks] ${count} tareas completadas fueron archivadas.`);
   return { archivedCount: count };
 };
 
 export const unarchiveTask = async (
-  taskId: string, 
-  userId: string, 
+  taskId: string,
+  userId: string,
   teamId: string
-  // projectId?: string // Podrías necesitar projectId para el log
 ) => {
   const taskRef = doc(db, 'tasks', taskId);
 
-  // Simplemente quitamos los campos de archivo
   await updateDoc(taskRef, {
     isArchived: false,
-    archivedAt: deleteField(), // Importa deleteField de 'firebase/firestore'
-    archivedBy: deleteField() 
+    archivedAt: deleteField(),
+    archivedBy: deleteField()
   });
 
-  // Log de actividad
-  await createActivityLog({
-    taskId, 
+  await logActivity({
+    taskId,
     teamId,
     userId,
-    action: 'Tarea desarchivada',
-    // projectId // Opcional
+    action: ActivityAction.TASK_UNARCHIVED,
   });
 };
+
+export async function canMoveTask(
+  taskId: string,
+  newStatus: string,
+  allTasksStatusMap: Map<string, string>
+): Promise<{ allowed: boolean; blockedBy?: string[] }> {
+  if (newStatus !== 'todo') {
+    const blockers = await getBlockedByTasks(taskId);
+    const activeBlockerIds = blockers
+      .filter((dep) => allTasksStatusMap.get(dep.fromTaskId) !== 'done')
+      .map((dep) => dep.fromTaskId);
+
+    if (activeBlockerIds.length > 0) {
+      return { allowed: false, blockedBy: activeBlockerIds };
+    }
+  }
+
+  return { allowed: true };
+}
+
+export async function canArchiveTask(
+  taskId: string
+): Promise<{ allowed: boolean; reason?: string }> {
+  const dependents = await hasDependents(taskId);
+  if (dependents) {
+    return {
+      allowed: false,
+      reason: 'This task has dependencies. Remove them first.',
+    };
+  }
+  return { allowed: true };
+}
+
+export async function canDeleteTask(
+  taskId: string
+): Promise<{ allowed: boolean; reason?: string }> {
+  const dependents = await hasDependents(taskId);
+  if (dependents) {
+    return {
+      allowed: false,
+      reason: 'This task has dependencies. Remove them first.',
+    };
+  }
+  return { allowed: true };
+}

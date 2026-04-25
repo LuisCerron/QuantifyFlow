@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { useProjects } from "@/hooks/useProjects";
 import { useCurrentTeam } from "@/hooks/useCurrentTeam";
-import { ProjectCard } from "@/components/projects/ProjectCard";
+import ProjectCard from "@/components/projects/ProjectCard";
 import { CreateProjectModal } from "@/components/projects/CreateProjectModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

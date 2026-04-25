@@ -1,10 +1,14 @@
 "use client"
 
-import React from "react"
+import React, { memo, useMemo, useCallback } from "react"
 import { useTheme } from "next-themes"
 import { StrictModeDroppable } from "./StrictModeDroppable"
 import TaskCard from "./TaskCard"
 import type { TaskWithDetails, User } from "@/types"
+
+function cx(...c: Array<string | false | undefined>) {
+  return c.filter(Boolean).join(" ")
+}
 
 interface KanbanColumnProps {
   column: {
@@ -15,22 +19,24 @@ interface KanbanColumnProps {
   onTaskClick: (task: TaskWithDetails) => void
   userRole: "admin" | "member" | null
   currentUserId: string
-  // Props de subtareas
-  onSubtaskToggle: (taskId: string, subtaskId: string, newStatus: boolean) => void;
-  updatingSubtaskId: string | null;
+  onSubtaskToggle: (taskId: string, subtaskId: string, newStatus: boolean) => void
+  updatingSubtaskId: string | null
+  dependencyMap?: Map<string, { blockedBy: number; blocking: number; isBlocked: boolean }>
 }
 
-export default function KanbanColumn({
+const KanbanColumn = memo(function KanbanColumn({
   column,
   onTaskClick,
   userRole,
   currentUserId,
-  // --- CAMBIO 2: Recibir props ---
   onSubtaskToggle,
   updatingSubtaskId,
+  dependencyMap,
 }: KanbanColumnProps) {
   const { resolvedTheme } = useTheme()
   const isLight = resolvedTheme === "light"
+  
+  const taskCount = useMemo(() => column.tasks.length, [column.tasks])
 
   return (
     <section
@@ -79,7 +85,8 @@ export default function KanbanColumn({
               const isAssignedToMe =
                 task.assignedToIds?.includes(currentUserId) ?? false
               const canDrag = userRole === "admin" || isAssignedToMe
-              const canEdit = userRole === "admin" 
+              const canEdit = userRole === "admin"
+              const depInfo = dependencyMap?.get(task.id)
               return (
                 <TaskCard
                   key={task.id}
@@ -88,10 +95,11 @@ export default function KanbanColumn({
                   onClick={() => onTaskClick(task)}
                   isDraggable={canDrag}
                   isEditable={canEdit}
-                  
-                  // --- CAMBIO 3: Pasar las nuevas props ---
                   onSubtaskToggle={onSubtaskToggle}
                   updatingSubtaskId={updatingSubtaskId}
+                  blockedByCount={depInfo?.blockedBy ?? 0}
+                  blockingCount={depInfo?.blocking ?? 0}
+                  isBlocked={depInfo?.isBlocked ?? false}
                 />
               )
             })}
@@ -101,8 +109,6 @@ export default function KanbanColumn({
       </StrictModeDroppable>
     </section>
   )
-}
+});
 
-function cx(...c: Array<string | false | undefined>) {
-  return c.filter(Boolean).join(" ")
-}
+export default KanbanColumn

@@ -1,7 +1,7 @@
 "use client"
 
-import { useTheme as useThemeContext } from "@/lib/theme-context"
+import { useColorPalette } from "@/lib/theme-context"
 
 export function useTheme() {
-  return useThemeContext()
+  return useColorPalette()
 }

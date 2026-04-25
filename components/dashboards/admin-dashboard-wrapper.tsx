@@ -9,6 +9,7 @@ import { TaskWithDetails, Subtask } from "@/types"; // Importar tipos necesarios
 import { updateSubtaskCompletion, archiveTask } from "@/services/kanbanService"; // Importar servicios
 import { toast } from "sonner"; // O tu librería de toast
 import { useProjects } from '@/hooks/useProjects'; // 👈 Importa el hook
+import { getTasksDependencySummary } from '@/services/dependencyService';
 
 interface AdminDashboardWrapperProps {
   userName: string | null;
@@ -25,6 +26,7 @@ export function AdminDashboardWrapper({
   const [liveData, setLiveData] = useState(initialAdminData);
   const [updatingSubtaskId, setUpdatingSubtaskId] = useState<string | null>(null);
   const [archivingTaskId, setArchivingTaskId] = useState<string | null>(null);
+  const [dependencyMap, setDependencyMap] = useState<Map<string, { blockedBy: number; blocking: number; related: number; isBlocked: boolean }>>(new Map());
 
   const { allProjects, isLoading: isLoadingProjects, error: projectsError } = useProjects(liveData?.team.id);
 
@@ -32,6 +34,39 @@ export function AdminDashboardWrapper({
   useEffect(() => {
     setLiveData(initialAdminData);
   }, [initialAdminData]);
+
+  // Fetch dependency data for visible tasks
+  useEffect(() => {
+    if (!liveData) return;
+
+    const allTasks = [...liveData.adminAssignedTasks, ...liveData.tasks];
+    const projectIds = [...new Set(allTasks.map((t) => t.projectId).filter(Boolean))];
+
+    if (projectIds.length === 0) return;
+
+    const taskStatusMap = new Map<string, string>();
+    allTasks.forEach((t) => taskStatusMap.set(t.id, t.status));
+
+    let cancelled = false;
+
+    (async () => {
+      const merged = new Map<string, { blockedBy: number; blocking: number; related: number; isBlocked: boolean }>();
+      await Promise.all(
+        projectIds.map(async (projectId) => {
+          const taskIds = allTasks.filter((t) => t.projectId === projectId).map((t) => t.id);
+          try {
+            const map = await getTasksDependencySummary(projectId, taskIds, taskStatusMap);
+            map.forEach((value, key) => merged.set(key, value));
+          } catch (err) {
+            console.error('Error fetching dependency summary for project', projectId, err);
+          }
+        })
+      );
+      if (!cancelled) setDependencyMap(merged);
+    })();
+
+    return () => { cancelled = true; };
+  }, [liveData]);
 
   const handleRefresh = () => {
     router.refresh(); // Refresca los datos del servidor (Server Component)
@@ -114,6 +149,7 @@ export function AdminDashboardWrapper({
       updatingSubtaskId={updatingSubtaskId}
       onArchiveTask={handleArchiveTask}
       archivingTaskId={archivingTaskId}
+      dependencyMap={dependencyMap}
     />
   );
 }

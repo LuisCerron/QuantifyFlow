@@ -148,7 +148,7 @@ export default function ProjectSettingsClientPage({ projectId }: ProjectSettings
         <div className="max-w-3xl mx-auto space-y-8"> 
             <header className="mb-6">
                  <h1 className="text-3xl font-bold">Configuración del Proyecto</h1>
-                 <p className="text-muted-foreground">Gestiona los detalles de "{project.name}".</p>
+                 <p className="text-muted-foreground">Gestiona los detalles de &quot;{project.name}&quot;.</p>
             </header>
             
             <form onSubmit={handleSave} className="space-y-6">

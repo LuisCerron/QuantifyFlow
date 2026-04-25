@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { collection, query, where, getDocs, doc, addDoc, updateDoc, deleteDoc, Timestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
@@ -63,13 +63,13 @@ export function useInvitations(teamId: string | null) {
           expiresAt,
           usedBy: [],
         }
-        setInvitations([...invitations, newInvitation])
+        setInvitations((prev) => [...prev, newInvitation])
         return newInvitation
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to generate invitation"))
       }
     },
-    [teamId, invitations],
+    [teamId],
   )
 
   const acceptInvitation = useCallback(async (code: string, userId: string) => {
@@ -111,13 +111,19 @@ export function useInvitations(teamId: string | null) {
     async (invitationId: string) => {
       try {
         await deleteDoc(doc(db, "invitationCodes", invitationId))
-        setInvitations(invitations.filter((i) => i.id !== invitationId))
+        setInvitations((prev) => prev.filter((i) => i.id !== invitationId))
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to revoke invitation"))
       }
     },
-    [invitations],
+    [],
   )
+
+  useEffect(() => {
+    if (teamId) {
+      fetchInvitations()
+    }
+  }, [teamId, fetchInvitations])
 
   return { invitations, loading, error, fetchInvitations, generateInvitation, acceptInvitation, revokeInvitation }
 }

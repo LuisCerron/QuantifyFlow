@@ -124,3 +124,34 @@ export interface TaskWithDetails extends Task {
   tags: Tag[];
   archivedByUser?: User;
 }
+
+export type DependencyType = 'blocks' | 'relates_to' | 'precedes' | 'duplicates';
+
+export interface TaskDependency {
+  id: string;
+  fromTaskId: string;
+  toTaskId: string;
+  type: DependencyType;
+  projectId: string;
+  teamId: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface DependencyGraphNode {
+  id: string;
+  position: { x: number; y: number };
+  data: TaskWithDetails;
+}
+
+export interface DependencyGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: DependencyType;
+}
+
+export interface DependencyGraphData {
+  nodes: DependencyGraphNode[];
+  edges: DependencyGraphEdge[];
+}

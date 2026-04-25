@@ -1,15 +1,40 @@
 
 import { collection, query, where, getDocs, doc, getDoc, orderBy, limit } from 'firebase/firestore';
-import { db } from '@/lib/firebase'; // Asegúrate de que esta ruta sea correcta
+import { db } from '@/lib/firebase';
 import { 
   User, 
   Team, 
   ActivityLog, 
   TimeLog,
   TaskWithDetails
-} from '@/types/index'; // Importa tus tipos
-import { getCurrentUserTasks } from '@/services/kanbanService'; // Importa la función anterior
-import { UserDashboardData } from '@/types/dashboard-types'; // Importa la nueva interfaz
+} from '@/types/index';
+import { getCurrentUserTasks } from '@/services/kanbanService';
+import { UserDashboardData } from '@/types/dashboard-types';
+
+function serializeForClient<T extends Record<string, any>>(data: T): T {
+  const serialized = { ...data } as Record<string, any>;
+  
+  for (const key in serialized) {
+    const value = serialized[key];
+    
+    if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
+      serialized[key] = value.toDate().toISOString();
+    }
+    else if (value && typeof value === 'object' && 'seconds' in value && 'nanoseconds' in value) {
+      serialized[key] = new Date(value.seconds * 1000).toISOString();
+    }
+    else if (Array.isArray(value)) {
+      serialized[key] = value.map((item: any) => 
+        typeof item === 'object' && item !== null ? serializeForClient(item) : item
+      );
+    }
+    else if (value && typeof value === 'object' && value !== null && !('toDate' in value) && !('seconds' in value)) {
+      serialized[key] = serializeForClient(value);
+    }
+  }
+  
+  return serialized as T;
+}
 
 export const getUserDashboardData = async (userId: string): Promise<UserDashboardData | null> => {
   // LOG: Inicio de la función
@@ -96,13 +121,13 @@ export const getUserDashboardData = async (userId: string): Promise<UserDashboar
       })()
     ]);
 
-    const dashboardData: UserDashboardData = {
+    const dashboardData: UserDashboardData = serializeForClient({
       user: userData,
       teams,
       assignedTasks,
       activityLogs,
       timeLogs,
-    };
+    });
 
     // LOG: Objeto final antes de ser retornado
     console.log(`[DashboardService] 🚀 Ensamblaje de datos del dashboard completado.`, dashboardData);

@@ -15,7 +15,10 @@ import {
   removeSubtask as apiRemoveSubtask,
   updateSubtaskTitle,
 } from "@/services/kanbanService"; // Asumo que este es el path correcto
-import { X, Plus, Trash2 } from "lucide-react";
+import { X, Plus, Trash2, GitGraph, Lock, Link2, ArrowRight, Copy } from "lucide-react";
+import Link from "next/link";
+import { useTaskDependencies } from "@/hooks/useTaskDependencies";
+import type { DependencyType, TaskDependency } from "@/types";
 
 // shadcn/ui Select para resolver el dropdown blanco en modo oscuro
 import {
@@ -37,6 +40,7 @@ interface TaskModalProps {
   userRole: "admin" | "member" | null;
   teamMembers: User[];
   availableTags: Tag[];
+  allProjectTasks?: TaskWithDetails[];
 }
 
 export default function TaskModal({
@@ -50,6 +54,7 @@ export default function TaskModal({
   userRole,
   teamMembers,
   availableTags,
+  allProjectTasks = [],
 }: TaskModalProps) {
   const { resolvedTheme } = useTheme();
   const isLight = resolvedTheme === "light";
@@ -581,6 +586,17 @@ export default function TaskModal({
               </button>
             </div>
 
+            {/* Dependencies Section */}
+            {isEditMode && taskToEdit && (
+              <DependencySection
+                taskId={taskToEdit.id}
+                projectId={projectId}
+                teamId={teamId}
+                allTasks={allProjectTasks}
+                currentUserId={userId}
+              />
+            )}
+
             {/* Error */}
             {error && (
               <p className={isLight ? "rounded-2xl border-2 border-black p-3 text-sm font-semibold text-black" : "rounded-2xl bg-rose-500/10 p-3 text-sm font-medium text-rose-500 ring-2 ring-rose-500/30"}>
@@ -628,6 +644,260 @@ export default function TaskModal({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DependencySection({
+  taskId,
+  projectId,
+  teamId,
+  allTasks,
+  currentUserId,
+}: {
+  taskId: string;
+  projectId: string;
+  teamId: string;
+  allTasks: TaskWithDetails[];
+  currentUserId: string;
+}) {
+  const {
+    dependencies,
+    blockedBy,
+    blocking,
+    related,
+    loading,
+    addDependency,
+    deleteDependency,
+  } = useTaskDependencies(taskId, projectId);
+
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [selectedType, setSelectedType] = useState<DependencyType>("blocks");
+  const [isAdding, setIsAdding] = useState(false);
+
+  // Direction-aware lists for display
+  const precededBy = dependencies.filter(
+    (d) => d.type === "precedes" && d.toTaskId === taskId
+  );
+  const precedesOthers = dependencies.filter(
+    (d) => d.type === "precedes" && d.fromTaskId === taskId
+  );
+  const duplicatedBy = dependencies.filter(
+    (d) => d.type === "duplicates" && d.toTaskId === taskId
+  );
+  const duplicatesOthers = dependencies.filter(
+    (d) => d.type === "duplicates" && d.fromTaskId === taskId
+  );
+
+  const availableTasks = allTasks.filter(
+    (t) =>
+      t.id !== taskId &&
+      !dependencies.some(
+        (d) => d.fromTaskId === t.id || d.toTaskId === t.id
+      )
+  );
+
+  const handleAdd = async () => {
+    if (!selectedTaskId) return;
+    setIsAdding(true);
+    try {
+      const fromId =
+        selectedType === "blocks" ||
+        selectedType === "precedes" ||
+        selectedType === "duplicates"
+          ? selectedTaskId
+          : taskId;
+      const toId =
+        selectedType === "blocks" ||
+        selectedType === "precedes" ||
+        selectedType === "duplicates"
+          ? taskId
+          : selectedTaskId;
+
+      await addDependency(fromId, toId, selectedType, teamId, currentUserId);
+      setSelectedTaskId("");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to add dependency"
+      );
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const typeConfig: Record<
+    DependencyType,
+    { label: string; icon: React.ReactNode; color: string }
+  > = {
+    blocks: { label: "Blocks", icon: <Lock className="h-4 w-4" />, color: "text-red-500" },
+    relates_to: { label: "Relates to", icon: <Link2 className="h-4 w-4" />, color: "text-green-500" },
+    precedes: { label: "Precedes", icon: <ArrowRight className="h-4 w-4" />, color: "text-blue-500" },
+    duplicates: { label: "Duplicates", icon: <Copy className="h-4 w-4" />, color: "text-yellow-500" },
+  };
+
+  const getStatusBadgeClass = (status?: string) => {
+    if (status === "done")
+      return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400";
+    if (status === "in-progress")
+      return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
+    return "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400";
+  };
+
+  const renderDependencyList = (
+    deps: TaskDependency[],
+    title: string,
+    direction: "inbound" | "outbound" | "bidirectional"
+  ) => {
+    if (deps.length === 0) return null;
+
+    return (
+      <div className="mb-4">
+        <h4 className="text-sm font-medium text-muted-foreground mb-2">
+          {title}
+        </h4>
+        <div className="space-y-2">
+          {deps.map((dep) => {
+            let otherTaskId: string;
+            let text: string;
+
+            if (direction === "inbound") {
+              otherTaskId = dep.fromTaskId;
+              const otherTitle = allTasks.find((t) => t.id === otherTaskId)?.title || "Unknown";
+              text = `${otherTitle} ${typeConfig[dep.type].label.toLowerCase()} this`;
+            } else if (direction === "outbound") {
+              otherTaskId = dep.toTaskId;
+              const otherTitle = allTasks.find((t) => t.id === otherTaskId)?.title || "Unknown";
+              text = `This ${typeConfig[dep.type].label.toLowerCase()} ${otherTitle}`;
+            } else {
+              otherTaskId =
+                dep.fromTaskId === taskId ? dep.toTaskId : dep.fromTaskId;
+              const otherTitle = allTasks.find((t) => t.id === otherTaskId)?.title || "Unknown";
+              text = `Related to ${otherTitle}`;
+            }
+
+            const otherTask = allTasks.find((t) => t.id === otherTaskId);
+            const config = typeConfig[dep.type];
+
+            return (
+              <div
+                key={dep.id}
+                className="flex items-center justify-between p-2 rounded-lg border bg-card"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={config.color}>{config.icon}</span>
+                  <span className="text-sm">{text}</span>
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded-full ${getStatusBadgeClass(
+                      otherTask?.status
+                    )}`}
+                  >
+                    {otherTask?.status || "unknown"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    deleteDependency(dep.id, teamId, currentUserId).catch(
+                      (err) =>
+                        toast.error(
+                          err instanceof Error
+                            ? err.message
+                            : "Failed to remove dependency"
+                        )
+                    )
+                  }
+                  className="text-muted-foreground hover:text-destructive transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4 pt-4 border-t">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold">Dependencies</h3>
+        <Link
+          href={`/projects/${projectId}/dependencies`}
+          className="text-sm text-muted-foreground hover:text-primary flex items-center gap-1"
+        >
+          <GitGraph className="h-4 w-4" />
+          View Graph
+        </Link>
+      </div>
+
+      {/* Add dependency */}
+      <div className="flex gap-2 items-end">
+        <div className="flex-1">
+          <label className="text-sm font-medium mb-1 block">Task</label>
+          <select
+            value={selectedTaskId}
+            onChange={(e) => setSelectedTaskId(e.target.value)}
+            className="w-full p-2 rounded-lg border bg-background"
+          >
+            <option value="">Select a task...</option>
+            {availableTasks.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.title}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="w-40">
+          <label className="text-sm font-medium mb-1 block">Type</label>
+          <select
+            value={selectedType}
+            onChange={(e) => setSelectedType(e.target.value as DependencyType)}
+            className="w-full p-2 rounded-lg border bg-background"
+          >
+            <option value="blocks">Blocks</option>
+            <option value="relates_to">Relates to</option>
+            <option value="precedes">Precedes</option>
+            <option value="duplicates">Duplicates</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={handleAdd}
+          disabled={!selectedTaskId || isAdding}
+          className="px-4 py-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-50"
+        >
+          {isAdding ? "Adding..." : "Add"}
+        </button>
+      </div>
+
+      {loading && (
+        <p className="text-sm text-muted-foreground">Loading dependencies...</p>
+      )}
+
+      {/* Lists by category */}
+      {renderDependencyList(blockedBy, "Blocked By", "inbound")}
+      {renderDependencyList(blocking, "Blocking", "outbound")}
+      {renderDependencyList(related, "Related", "bidirectional")}
+      {renderDependencyList(precededBy, "Preceded By", "inbound")}
+      {renderDependencyList(precedesOthers, "Precedes", "outbound")}
+      {renderDependencyList(duplicatedBy, "Duplicated By", "inbound")}
+      {renderDependencyList(duplicatesOthers, "Duplicates", "outbound")}
+
+      {[
+        blockedBy,
+        blocking,
+        related,
+        precededBy,
+        precedesOthers,
+        duplicatedBy,
+        duplicatesOthers,
+      ].every((d) => d.length === 0) &&
+        !loading && (
+          <p className="text-sm text-muted-foreground italic">
+            No dependencies yet
+          </p>
+        )}
     </div>
   );
 }

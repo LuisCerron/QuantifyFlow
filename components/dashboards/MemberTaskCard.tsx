@@ -1,69 +1,62 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { memo, useState, useEffect, useMemo } from 'react';
 import type { Task, TaskWithDetails, User } from '@/types';
-// Importa la función que acabas de crear
 import { enrichTaskWithDetails } from '@/services/kanbanService';
 import { CheckCircle, Users, Tag as TagIcon } from 'lucide-react';
 
 interface MemberTaskCardProps {
-  // La tarea básica que viene de la consulta inicial
-  task: Task; 
-  // El caché de usuarios para evitar consultas repetidas
+  task: Task;
   usersCache: Record<string, User>;
-  // Opcional: una función para manejar el click en la tarjeta
   onClick?: (taskDetails: TaskWithDetails) => void;
 }
 
-// Un componente simple para mostrar mientras se cargan los datos
-const CardSkeleton = () => (
-  <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 w-full animate-pulse">
-    <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-3/4 mb-4"></div>
-    <div className="flex justify-between items-center mb-4">
-      <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-1/4"></div>
-      <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-1/4"></div>
+const CardSkeleton = memo(function CardSkeleton() {
+  return (
+    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 w-full animate-pulse">
+      <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-3/4 mb-4"></div>
+      <div className="flex justify-between items-center mb-4">
+        <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-1/4"></div>
+        <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-1/4"></div>
+      </div>
+      <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-1/2"></div>
     </div>
-    <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-1/2"></div>
-  </div>
-);
+  );
+});
 
-
-export default function MemberTaskCard({ task, usersCache, onClick }: MemberTaskCardProps) {
-  // Estado para guardar la tarea con todos sus detalles
+const MemberTaskCard = memo(function MemberTaskCard({ task, usersCache, onClick }: MemberTaskCardProps) {
   const [details, setDetails] = useState<TaskWithDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // useEffect para llamar a la función asíncrona cuando el componente se monta o la tarea cambia
   useEffect(() => {
     const fetchDetails = async () => {
       try {
         setIsLoading(true);
-        // ✨ ¡Aquí usamos tu nueva función! ✨
         const enrichedData = await enrichTaskWithDetails(task, usersCache);
         setDetails(enrichedData);
       } catch (error) {
         console.error(`Error al enriquecer la tarea ${task.id}:`, error);
-        setDetails(null); // Resetea en caso de error
+        setDetails(null);
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchDetails();
-  }, [task, usersCache]); // Se ejecuta si la tarea o el caché cambian
+  }, [task, usersCache]);
 
-  // Si está cargando, muestra el esqueleto
+  const completedSubtasks = useMemo(() => 
+    details?.subtasks?.filter(st => st.completed).length ?? 0,
+    [details?.subtasks]
+  );
+
   if (isLoading) {
     return <CardSkeleton />;
   }
 
-  // Si no se pudieron cargar los detalles, no muestra nada
   if (!details) {
     return null;
   }
-
-  // Calculamos los datos para mostrar
-  const completedSubtasks = details.subtasks.filter(st => st.completed).length;
 
   return (
     <div
@@ -128,4 +121,6 @@ export default function MemberTaskCard({ task, usersCache, onClick }: MemberTask
       )}
     </div>
   );
-}
+});
+
+export default MemberTaskCard

@@ -3,6 +3,34 @@
 import { db } from '@/lib/firebase';
 import { doc, getDoc, updateDoc, collection, addDoc, serverTimestamp, query, where, deleteDoc, getDocs, Timestamp } from 'firebase/firestore';
 import { useState, useEffect, useCallback } from 'react';
+import { chunkArray } from '@/lib/utils/helpers';
+
+const FIREBASE_IN_LIMIT = 10;
+
+function serializeForClient<T extends Record<string, any>>(data: T): T {
+  const serialized = { ...data } as Record<string, any>;
+  
+  for (const key in serialized) {
+    const value = serialized[key];
+    
+    if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
+      serialized[key] = value.toDate().toISOString();
+    }
+    else if (value && typeof value === 'object' && 'seconds' in value && 'nanoseconds' in value) {
+      serialized[key] = new Date(value.seconds * 1000).toISOString();
+    }
+    else if (Array.isArray(value)) {
+      serialized[key] = value.map((item: any) => 
+        typeof item === 'object' && item !== null ? serializeForClient(item) : item
+      );
+    }
+    else if (value && typeof value === 'object' && value !== null && !('toDate' in value) && !('seconds' in value)) {
+      serialized[key] = serializeForClient(value);
+    }
+  }
+  
+  return serialized as T;
+}
 
 // --- Tipos ---
 import { User } from '@/types';
@@ -21,6 +49,24 @@ export interface TeamMember { // Documento en Firestore 'teamMembers'
 export interface TeamMemberWithDetails extends User { // Objeto combinado para la UI
   rol: TeamMemberRol;
   teamMemberDocId: string;
+}
+
+async function batchFetchUsers(userIds: string[]): Promise<Record<string, User>> {
+  const users: Record<string, User> = {};
+  if (userIds.length === 0) return users;
+
+  const uniqueIds = [...new Set(userIds)];
+  const chunks = chunkArray(uniqueIds, FIREBASE_IN_LIMIT);
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      const q = query(collection(db, 'users'), where('__name__', 'in', chunk));
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach((d) => {
+        users[d.id] = { uid: d.id, ...d.data() } as User;
+      });
+    })
+  );
+  return users;
 }
 
 
@@ -68,36 +114,28 @@ export const useAdminTeamData = (teamId: string) => {
       let members: TeamMemberWithDetails[] = [];
       if (!membersSnapshot.empty) {
         const memberDocsData = membersSnapshot.docs.map(doc => ({
-           id: doc.id, // ID del documento teamMembers
+           id: doc.id,
            ...(doc.data() as Omit<TeamMember, 'id'>)
         }));
         
         const userIds = memberDocsData.map(m => m.userId);
 
         if (userIds.length > 0) {
-          // Obtener datos de los usuarios
-          // Usamos '__name__' si userId es el ID del documento en 'users'
-          // o 'uid' si tienes un campo 'uid' dentro del documento 'users'
-          const usersQuery = query(collection(db, 'users'), where('__name__', 'in', userIds));
-          const usersSnapshot = await getDocs(usersQuery);
-          const usersData: Record<string, User> = {};
-          usersSnapshot.forEach(doc => {
-            usersData[doc.id] = { uid: doc.id, ...doc.data() } as User;
-          });
+          const usersData = await batchFetchUsers(userIds);
 
-          // Combinar datos de teamMember y user
           members = memberDocsData.map(memberDoc => {
             const userDetail = usersData[memberDoc.userId];
-            return {
-              ...(userDetail || { uid: memberDoc.userId, displayName: 'Usuario Desconocido' }), // Fallback por si falta el usuario
+            return serializeForClient({
+              ...(userDetail || { uid: memberDoc.userId, displayName: 'Usuario Desconocido' }),
               rol: memberDoc.rol,
-              teamMemberDocId: memberDoc.id, // Guardamos el ID del doc teamMembers
-            };
-          }).sort((a,b) => (a.displayName ?? '').localeCompare(b.displayName ?? '')); // Ordenar alfabéticamente
+              teamMemberDocId: memberDoc.id,
+              joinedAt: memberDoc.joinedAt,
+            });
+          }).sort((a,b) => (a.displayName ?? '').localeCompare(b.displayName ?? ''));
         }
       }
 
-      setData({ team, tags, members });
+      setData({ team: team ? serializeForClient(team) : null, tags, members });
 
     } catch (err: any) {
       console.error("Error al cargar datos de administrador:", err);

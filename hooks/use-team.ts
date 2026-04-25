@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import type { Team, TeamMember } from "@/types"
@@ -17,18 +17,24 @@ export function useTeam(teamId: string | null) {
     try {
       const teamDoc = await getDoc(doc(db, "teams", teamId))
       if (teamDoc.exists()) {
-        setTeam(teamDoc.data() as Team)
+        setTeam({ ...teamDoc.data(), id: teamDoc.id } as Team)
       }
 
       const membersQuery = query(collection(db, "teamMembers"), where("teamId", "==", teamId))
       const membersSnapshot = await getDocs(membersQuery)
-      setMembers(membersSnapshot.docs.map((doc) => doc.data() as TeamMember))
+      setMembers(membersSnapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as TeamMember)))
     } catch (err) {
       setError(err instanceof Error ? err : new Error("Failed to fetch team"))
     } finally {
       setLoading(false)
     }
   }, [teamId])
+
+  useEffect(() => {
+    if (teamId) {
+      fetchTeam()
+    }
+  }, [teamId, fetchTeam])
 
   return { team, members, loading, error, fetchTeam }
 }

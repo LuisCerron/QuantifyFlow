@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { collection, query, where, getDocs, addDoc, Timestamp, orderBy } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import type { ActivityLog } from "@/types"
@@ -49,14 +49,20 @@ export function useActivityLog(taskId: string | null) {
           details,
           createdAt: new Date(),
         }
-        setLogs([newLog, ...logs])
+        setLogs((prev) => [newLog, ...prev])
         return newLog
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to add activity log"))
       }
     },
-    [taskId, logs],
+    [taskId],
   )
+
+  useEffect(() => {
+    if (taskId) {
+      fetchLogs()
+    }
+  }, [taskId, fetchLogs])
 
   return { logs, loading, error, fetchLogs, addLog }
 }

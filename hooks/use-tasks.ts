@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { collection, query, where, getDocs, doc, addDoc, updateDoc, deleteDoc, Timestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import type { Task } from "@/types"
@@ -60,14 +60,15 @@ export function useTasks(projectId: string | null) {
           createdBy: createdBy || "unknown",
           createdAt: new Date(),
           updatedAt: new Date(),
+          isArchived: false,
         }
-        setTasks([...tasks, newTask])
+        setTasks((prev) => [...prev, newTask])
         return newTask
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to create task"))
       }
     },
-    [projectId, tasks],
+    [projectId],
   )
 
   const updateTask = useCallback(
@@ -77,25 +78,31 @@ export function useTasks(projectId: string | null) {
           ...updates,
           updatedAt: Timestamp.now(),
         })
-        setTasks(tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t)))
+        setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...updates } : t)))
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to update task"))
       }
     },
-    [tasks],
+    [],
   )
 
   const deleteTask = useCallback(
     async (taskId: string) => {
       try {
         await deleteDoc(doc(db, "tasks", taskId))
-        setTasks(tasks.filter((t) => t.id !== taskId))
+        setTasks((prev) => prev.filter((t) => t.id !== taskId))
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to delete task"))
       }
     },
-    [tasks],
+    [],
   )
+
+  useEffect(() => {
+    if (projectId) {
+      fetchTasks()
+    }
+  }, [projectId, fetchTasks])
 
   return { tasks, loading, error, fetchTasks, createTask, updateTask, deleteTask }
 }
