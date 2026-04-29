@@ -238,9 +238,7 @@ const TaskCard = memo(function TaskCard({
   )
 }, (prevProps, nextProps) => {
   return (
-    prevProps.task.id === nextProps.task.id &&
-    prevProps.task.status === nextProps.task.status &&
-    prevProps.task.title === nextProps.task.title &&
+    prevProps.task === nextProps.task &&
     prevProps.index === nextProps.index &&
     prevProps.isDraggable === nextProps.isDraggable &&
     prevProps.isEditable === nextProps.isEditable &&

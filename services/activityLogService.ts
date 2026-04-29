@@ -6,7 +6,9 @@ import {
   where, 
   orderBy, 
   limit,
-  Timestamp 
+  Timestamp,
+  writeBatch,
+  doc,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toDateSafe } from '@/lib/utils/date';
@@ -64,8 +66,15 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
 
 export async function logActivities(inputs: ActivityLogInput[]): Promise<void> {
   try {
-    const promises = inputs.map(input => logActivity(input));
-    await Promise.all(promises);
+    const batch = writeBatch(db);
+    for (const input of inputs) {
+      const ref = doc(collection(db, 'activityLog'));
+      batch.set(ref, {
+        ...input,
+        createdAt: Timestamp.now(),
+      });
+    }
+    await batch.commit();
   } catch (error) {
     console.error('Failed to batch log activities:', error);
   }

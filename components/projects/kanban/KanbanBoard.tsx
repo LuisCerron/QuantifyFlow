@@ -17,7 +17,7 @@ interface KanbanBoardProps {
   dependencyMap?: Map<string, { blockedBy: number; blocking: number; isBlocked: boolean }>;
 }
 
-export default function KanbanBoard({
+function KanbanBoard({
   columns,
   onDragEnd,
   onTaskClick,
@@ -46,3 +46,5 @@ export default function KanbanBoard({
     </DragDropContext>
   );
 }
+
+export default React.memo(KanbanBoard);

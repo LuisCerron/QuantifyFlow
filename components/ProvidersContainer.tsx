@@ -15,17 +15,10 @@ export function ProvidersContainer({ children }: { children: React.ReactNode }) 
         setIsMounted(true);
     }, []);
 
-    if (!isMounted) {
-        // Devolver null sigue siendo una buena estrategia para evitar renderizar
-        // componentes dependientes del cliente en el servidor.
-        return null;
-    }
-
     return (
-        // 👇 Usa el ColorPaletteProvider aquí
         <ColorPaletteProvider userId={user?.uid}>
             {children}
-            <Toaster richColors position="top-right" />
+            {isMounted && <Toaster richColors position="top-right" />}
         </ColorPaletteProvider>
     );
 }

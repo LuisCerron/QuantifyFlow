@@ -8,9 +8,9 @@ export const TaskNode = memo((props: NodeProps) => {
   const task = props.data as unknown as TaskWithDetails;
 
   const statusColors: Record<string, string> = {
-    todo: 'bg-gray-200 border-gray-400',
-    'in-progress': 'bg-blue-100 border-blue-400',
-    done: 'bg-green-100 border-green-400',
+    todo: 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600',
+    'in-progress': 'bg-blue-100 dark:bg-blue-900/60 border-blue-400 dark:border-blue-600',
+    done: 'bg-green-100 dark:bg-green-900/60 border-green-400 dark:border-green-600',
   };
 
   const priorityIndicator: Record<string, string> = {

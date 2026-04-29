@@ -14,6 +14,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { TaskWithDetails, DependencyType } from '@/types';
+import { useTheme } from 'next-themes';
 import { TaskNode } from './TaskNode';
 
 const nodeTypes = {
@@ -57,6 +58,8 @@ export default function DependencyGraphClient({ initialNodes, initialEdges, proj
   );
 
   const [selectedTask, setSelectedTask] = useState<TaskWithDetails | null>(null);
+  const { resolvedTheme } = useTheme();
+  const isLight = resolvedTheme === 'light';
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     setSelectedTask(node.data as unknown as TaskWithDetails);
@@ -74,17 +77,19 @@ export default function DependencyGraphClient({ initialNodes, initialEdges, proj
         fitView
         attributionPosition="bottom-left"
       >
-        <Background />
+        <Background color={isLight ? '#e5e7eb' : '#374151'} gap={20} />
         <Controls />
         <MiniMap
           nodeColor={(node) => {
             const task = node.data as unknown as TaskWithDetails;
-            if (task.status === 'done') return '#22c55e';
-            if (task.status === 'in-progress') return '#3b82f6';
-            return '#9ca3af';
+            if (task.status === 'done') return isLight ? '#22c55e' : '#4ade80';
+            if (task.status === 'in-progress') return isLight ? '#3b82f6' : '#60a5fa';
+            return isLight ? '#9ca3af' : '#6b7280';
           }}
+          maskColor={isLight ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.6)'}
+          style={{ backgroundColor: isLight ? '#fff' : '#1e1e2e' }}
         />
-        <Panel position="top-right" className="bg-card p-4 rounded-lg shadow-lg">
+        <Panel position="top-right" className="bg-card p-4 rounded-lg shadow-lg dark:shadow-2xl">
           <h3 className="font-semibold mb-2">Legend</h3>
           {Object.entries(edgeTypeConfig).map(([type, config]) => (
             <div key={type} className="flex items-center gap-2 mb-1">

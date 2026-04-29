@@ -86,6 +86,9 @@ const KanbanColumn = memo(function KanbanColumn({
                 task.assignedToIds?.includes(currentUserId) ?? false
               const canDrag = userRole === "admin" || isAssignedToMe
               const canEdit = userRole === "admin"
+              const taskUpdatingId = task.subtasks?.some((s) => s.id === updatingSubtaskId)
+                ? updatingSubtaskId
+                : null
               const depInfo = dependencyMap?.get(task.id)
               return (
                 <TaskCard
@@ -96,7 +99,7 @@ const KanbanColumn = memo(function KanbanColumn({
                   isDraggable={canDrag}
                   isEditable={canEdit}
                   onSubtaskToggle={onSubtaskToggle}
-                  updatingSubtaskId={updatingSubtaskId}
+                  updatingSubtaskId={taskUpdatingId}
                   blockedByCount={depInfo?.blockedBy ?? 0}
                   blockingCount={depInfo?.blocking ?? 0}
                   isBlocked={depInfo?.isBlocked ?? false}

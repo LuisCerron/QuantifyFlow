@@ -15,7 +15,7 @@ import {
 } from "@/services/kanbanService";
 import { toast } from "sonner";
 
-import type { TaskWithDetails, User, Tag, Subtask } from "@/types";
+import type { TaskWithDetails, User, Tag, Subtask, TaskDependency } from "@/types";
 import { useAuth } from "@/context/AuthContext";
 
 type TaskStatus = "todo" | "in-progress" | "done";
@@ -60,23 +60,31 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
   const [tagFilter, setTagFilter] = useState<string[]>([]);
 
   // Dependencias entre tareas
-  const [dependencyMap, setDependencyMap] = useState<Map<string, { blockedBy: number; blocking: number; isBlocked: boolean }>>(new Map());
+  const [allDependencies, setAllDependencies] = useState<TaskDependency[]>([]);
 
   // Para evitar condiciones de carrera al refrescar rápidamente
   const fetchIdRef = useRef(0);
+  
+  // Ref para acceso estable a tasks sin añadirlo a deps
+  const tasksRef = useRef(tasks);
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (opts?: { silent?: boolean }) => {
     if (!projectId || !teamId) {
-      // Si faltan IDs, limpiamos y salimos sin marcar error
       setTasks([]);
       setTeamMembers([]);
       setAvailableTags([]);
+      setAllDependencies([]);
       setIsLoading(false);
       return;
     }
 
     const currentFetchId = ++fetchIdRef.current;
-    setIsLoading(true);
+    if (!opts?.silent) {
+      setIsLoading(true);
+    }
     setError(null);
 
     try {
@@ -86,7 +94,7 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
         getDocs(query(collection(db, "tags"), where("teamId", "==", teamId))),
       ]);
 
-      if (currentFetchId !== fetchIdRef.current) return; // respuesta obsoleta
+      if (currentFetchId !== fetchIdRef.current) return;
 
       const allTags: Tag[] = tagsSnapshot.docs.map(
         (doc) =>
@@ -96,48 +104,26 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
           } as Tag)
       );
 
-      for (const t of projectTasks) {
-        // Comprobar si 'assignedToIds' (array de strings) existe pero
-        // 'assignedTo' (array de Users) no se populó correctamente.
-        if (
-          t.assignedToIds &&
-          t.assignedToIds.length > 0 &&
-          (!t.assignedTo || t.assignedTo.length === 0)
-        ) {
-          console.warn(
-            `[useKanbanBoard] Tarea ${t.id} tiene 'assignedToIds' pero falta el array 'assignedTo' (usuarios populados).`
-          );
-        }
-
-        // Asegurar que los arrays existan para evitar errores en filtros/render
-        if (!Array.isArray(t.tags)) {
-          (t as any).tags = [];
-        }
-
-        // Nueva comprobación para 'subtasks'
-        if (!Array.isArray(t.subtasks)) {
-          (t as any).subtasks = [];
-        }
-
-        // Opcional: asegurar que assignedToIds exista si assignedTo existe
-        if (!Array.isArray(t.assignedToIds)) {
-          (t as any).assignedToIds = [];
-        }
-      }
-
       setTasks(projectTasks);
       setTeamMembers(members);
       setAvailableTags(allTags);
+
+      const { getProjectDependencies } = await import("@/services/dependencyService");
+      const deps = await getProjectDependencies(projectId);
+      if (currentFetchId === fetchIdRef.current) {
+        setAllDependencies(deps);
+      }
     } catch (err) {
       console.error("[useKanbanBoard] Error durante el fetch:", err);
       setError("Failed to fetch project data.");
     } finally {
-      if (currentFetchId === fetchIdRef.current) {
+      if (!opts?.silent) {
         setIsLoading(false);
       }
     }
   }, [projectId, teamId]);
 
+  // Initial fetch
   useEffect(() => {
     fetchData();
   }, [fetchData]);
@@ -186,38 +172,38 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
     return base;
   }, [filteredTasks]);
 
-  useEffect(() => {
-    if (!projectId || !teamId) return;
-
-    const loadDependencies = async () => {
-      const taskIds = Object.values(filteredTasks).flat().map((t) => t.id);
-      if (taskIds.length === 0) return;
-
-      const { getProjectDependencies } = await import("@/services/dependencyService");
-      const allDeps = await getProjectDependencies(projectId);
-
-      const map = new Map<string, { blockedBy: number; blocking: number; isBlocked: boolean }>();
-      taskIds.forEach((id) => {
-        const blockedBy = allDeps.filter((d) => d.toTaskId === id && d.type === "blocks");
-        const blocking = allDeps.filter((d) => d.fromTaskId === id && d.type === "blocks");
-
-        const activeBlockers = blockedBy.filter((dep) => {
-          const task = Object.values(filteredTasks).flat().find((t) => t.id === dep.fromTaskId);
-          return task?.status !== "done";
-        });
-
-        map.set(id, {
-          blockedBy: activeBlockers.length,
-          blocking: blocking.length,
-          isBlocked: activeBlockers.length > 0,
-        });
-      });
-
-      setDependencyMap(map);
-    };
-
-    loadDependencies();
-  }, [projectId, teamId, filteredTasks]);
+  const dependencyMap = useMemo(() => {
+    const map = new Map<string, { blockedBy: number; blocking: number; isBlocked: boolean }>();
+    const statusMap = new Map(filteredTasks.map(t => [t.id, t.status]));
+    
+    for (const dep of allDependencies) {
+      const taskId = dep.toTaskId;
+      if (!map.has(taskId)) {
+        map.set(taskId, { blockedBy: 0, blocking: 0, isBlocked: false });
+      }
+      const info = map.get(taskId)!;
+      
+      if (dep.type === 'blocks') {
+        const blockerStatus = statusMap.get(dep.fromTaskId);
+        if (blockerStatus !== 'done') {
+          info.blockedBy++;
+          info.isBlocked = true;
+        }
+      }
+    }
+    
+    for (const dep of allDependencies) {
+      const taskId = dep.fromTaskId;
+      if (!map.has(taskId)) {
+        map.set(taskId, { blockedBy: 0, blocking: 0, isBlocked: false });
+      }
+      if (dep.type === 'blocks') {
+        map.get(taskId)!.blocking++;
+      }
+    }
+    
+    return map;
+  }, [allDependencies, filteredTasks]);
 
   const handleDragEnd = useCallback(
     async (result: DropResult) => {
@@ -270,72 +256,45 @@ export const useKanbanBoard = (projectId: string, teamId: string) => {
 
   const handleSubtaskToggle = useCallback(
     (taskId: string, subtaskId: string, newCompleted: boolean) => {
-      if (updatingSubtaskId) return; // Prevenir clics múltiples
+      if (updatingSubtaskId) return;
       setUpdatingSubtaskId(subtaskId);
 
-      const originalTasks = tasks;
-      let didTaskStatusChange = false;
+      const originalTasks = tasksRef.current;
+      let determinedStatus: TaskStatus = 'in-progress';
 
-      // 1. Lógica Optimista
-      const newTasks = tasks.map((task) => {
-        if (task.id !== taskId) return task;
-
-        const originalStatus = task.status;
-        const newSubtasks = task.subtasks.map((sub) =>
-          sub.id === subtaskId ? { ...sub, completed: newCompleted } : sub
-        );
-
-        // Replicamos la lógica del servidor (todo/in-progress/done)
-        const totalSubtasks = newSubtasks.length;
-        const completedSubtasks = newSubtasks.filter(s => s.completed).length;
-
-        let determinedStatus: TaskStatus;
-
-        if (totalSubtasks === 0 || completedSubtasks === 0) {
-          determinedStatus = 'todo';
-        } else if (completedSubtasks === totalSubtasks) {
-          determinedStatus = 'done';
-        } else {
+      setTasks((prev) => {
+        return prev.map((t) => {
+          if (t.id !== taskId) return t;
+          
+          const newSubtasks = t.subtasks.map((sub) =>
+            sub.id === subtaskId ? { ...sub, completed: newCompleted } : sub
+          );
+          
+          const total = newSubtasks.length;
+          const completed = newSubtasks.filter(s => s.completed).length;
           determinedStatus = 'in-progress';
-        }
-
-        let newStatus = originalStatus;
-        if (originalStatus !== determinedStatus) {
-          newStatus = determinedStatus;
-          didTaskStatusChange = true;
-        }
-
-        return { ...task, subtasks: newSubtasks, status: newStatus };
+          if (total === 0 || completed === 0) determinedStatus = 'todo';
+          else if (completed === total) determinedStatus = 'done';
+          
+          return { ...t, subtasks: newSubtasks, status: determinedStatus };
+        });
       });
 
-      setTasks(newTasks); // Actualiza la UI al instante
-
-      // 2. Llamada a Firebase
       if (!user) {
-        console.error("No hay usuario, revirtiendo.");
-        setTasks(originalTasks);
         setUpdatingSubtaskId(null);
         return;
       }
 
-      updateSubtaskCompletion(subtaskId, taskId, newCompleted, user.uid, teamId)
-        .then(() => {
-          // 3. Sincronización silenciosa (solo si es necesario)
-          if (didTaskStatusChange) {
-            // El estado de la TAREA cambió (ej. a 'done'),
-            // así que refrescamos para confirmar.
-            fetchData(); 
-          }
-        })
+      updateSubtaskCompletion(subtaskId, taskId, newCompleted, user.uid, teamId, determinedStatus)
         .catch((err) => {
-          console.error("Error al actualizar la subtarea, revirtiendo:", err);
+          console.error("Error updating subtask, reverting:", err);
           setTasks(originalTasks);
         })
         .finally(() => {
           setUpdatingSubtaskId(null);
         });
     },
-    [tasks, teamId, user, updatingSubtaskId, fetchData] // 👈 Añadir dependencias
+    [updatingSubtaskId, user, teamId]
   );
 
   const clearFilters = useCallback(() => {

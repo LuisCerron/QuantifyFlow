@@ -18,33 +18,9 @@ import type { Task, Subtask, Tag, User, TaskWithDetails } from '@/types';
 import { chunkArray } from '@/lib/utils/helpers';
 import { logActivity, ActivityAction } from './activityLogService';
 import { getBlockedByTasks, hasDependents } from './dependencyService';
+import { serializeForClient } from '@/lib/utils/serializer';
 
 const FIREBASE_IN_LIMIT = 10;
-
-function serializeForClient<T extends Record<string, any>>(data: T): T {
-  const serialized = { ...data } as Record<string, any>;
-  
-  for (const key in serialized) {
-    const value = serialized[key];
-    
-    if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
-      serialized[key] = value.toDate().toISOString();
-    }
-    else if (value && typeof value === 'object' && 'seconds' in value && 'nanoseconds' in value) {
-      serialized[key] = new Date(value.seconds * 1000).toISOString();
-    }
-    else if (Array.isArray(value)) {
-      serialized[key] = value.map((item: any) => 
-        typeof item === 'object' && item !== null ? serializeForClient(item) : item
-      );
-    }
-    else if (value && typeof value === 'object' && value !== null && !('toDate' in value) && !('seconds' in value)) {
-      serialized[key] = serializeForClient(value);
-    }
-  }
-  
-  return serialized as T;
-}
 
 async function batchFetchSubtasks(taskIds: string[]): Promise<Map<string, Subtask[]>> {
   const subtasksByTaskId = new Map<string, Subtask[]>();
@@ -177,45 +153,45 @@ export const updateSubtaskCompletion = async (
   completed: boolean,
   userId: string,
   teamId: string,
+  newStatus?: 'todo' | 'in-progress' | 'done',
 ) => {
+  const batch = writeBatch(db);
   const subtaskRef = doc(db, 'subtasks', subtaskId);
-  const taskRef = doc(db, 'tasks', taskId);
+  batch.update(subtaskRef, { completed });
 
-  await updateDoc(subtaskRef, { completed });
-
-  await logActivity({
+  // Activity log in the same batch
+  const activityRef = doc(collection(db, 'activityLog'));
+  batch.set(activityRef, {
     taskId,
     teamId,
     userId,
     action: completed ? ActivityAction.SUBTASK_COMPLETED : ActivityAction.SUBTASK_UNCOMPLETED,
-    details: { subtaskId }
+    details: { subtaskId },
+    createdAt: Timestamp.now(),
   });
 
-  const subtasksQuery = query(collection(db, 'subtasks'), where('taskId', '==', taskId));
-  const subtasksSnapshot = await getDocs(subtasksQuery);
-  
-  const allSubtasks = subtasksSnapshot.docs.map(d => d.data() as Subtask);
-  const totalSubtasks = allSubtasks.length;
-  const completedSubtasks = allSubtasks.filter(st => st.completed).length;
+  // If client already computed the new status, update task status in the same batch
+  if (newStatus) {
+    const taskRef = doc(db, 'tasks', taskId);
+    batch.update(taskRef, { status: newStatus, updatedAt: Timestamp.now() });
 
-  let newStatus: 'todo' | 'in-progress' | 'done';
-
-  if (totalSubtasks === 0 || completedSubtasks === 0) {
-    newStatus = 'todo';
-  } else if (completedSubtasks === totalSubtasks) {
-    newStatus = 'done';
+    // Also log the status change
+    const statusActivityRef = doc(collection(db, 'activityLog'));
+    batch.set(statusActivityRef, {
+      taskId,
+      teamId,
+      userId,
+      action: ActivityAction.TASK_MOVED,
+      details: { newStatus },
+      createdAt: Timestamp.now(),
+    });
   } else {
-    newStatus = 'in-progress';
+    // Fallback: update task timestamp only
+    const taskRef = doc(db, 'tasks', taskId);
+    batch.update(taskRef, { updatedAt: Timestamp.now() });
   }
 
-  const taskSnap = await getDoc(taskRef);
-  if (taskSnap.exists()) {
-    const currentStatus = taskSnap.data().status;
-    
-    if (currentStatus !== newStatus) {
-      await updateTaskStatus(taskId, newStatus, userId, teamId);
-    }
-  }
+  await batch.commit();
 };
 
 
@@ -259,17 +235,19 @@ export const createTask = async (taskData: CreateTaskData): Promise<string> => {
     batch.set(taskTagRef, { taskId: taskRef.id, tagId });
   });
 
-  await batch.commit();
-
-  await logActivity({
+  // Add activity log to the same batch
+  const activityRef = doc(collection(db, 'activityLog'));
+  batch.set(activityRef, {
     taskId: taskRef.id,
     teamId: taskData.teamId,
     projectId: taskData.projectId,
     userId: taskData.createdBy,
     action: ActivityAction.TASK_CREATED,
     details: { title: taskData.title },
+    createdAt: Timestamp.now(),
   });
 
+  await batch.commit();
   return taskRef.id;
 };
 
@@ -307,14 +285,17 @@ export const deleteTask = async (taskId: string, userId: string, teamId: string)
   const taskTagsSnapshot = await getDocs(taskTagsQuery);
   taskTagsSnapshot.forEach(doc => batch.delete(doc.ref));
 
-  await batch.commit();
-
-  await logActivity({
+  // Add activity log to the same batch
+  const activityRef = doc(collection(db, 'activityLog'));
+  batch.set(activityRef, {
     taskId,
     teamId,
     userId,
     action: ActivityAction.TASK_DELETED,
+    createdAt: Timestamp.now(),
   });
+
+  await batch.commit();
 };
 
 
@@ -361,15 +342,18 @@ export const setTaskTags = async (taskId: string, newTagIds: string[], userId: s
     batch.set(newTaskTagRef, { taskId, tagId });
   });
 
-  await batch.commit();
-
-  await logActivity({
+  // Add activity log to the same batch
+  const activityRef = doc(collection(db, 'activityLog'));
+  batch.set(activityRef, {
     taskId,
     teamId,
     userId,
     action: ActivityAction.TAGS_UPDATED,
     details: { newTagIds },
+    createdAt: Timestamp.now(),
   });
+
+  await batch.commit();
 };
 
 export const updateSubtaskTitle = async (

@@ -3,6 +3,7 @@
 import type React from "react"
 
 import { useEffect, useState } from "react"
+import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import {
   signInWithEmailAndPassword,
@@ -36,17 +37,9 @@ export default function LoginPage() {
   const [loadingGithub, setLoadingGithub] = useState(false)
   const [error, setError] = useState("")
 
-  // Theme toggle (localStorage + class on <html>)
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    if (typeof window === "undefined") return "light"
-    return (localStorage.getItem("theme") as "light" | "dark") || "dark"
-  })
-
-  useEffect(() => {
-    if (typeof document === "undefined") return
-    document.documentElement.classList.toggle("dark", theme === "dark")
-    localStorage.setItem("theme", theme)
-  }, [theme])
+  const { resolvedTheme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -132,15 +125,19 @@ export default function LoginPage() {
     <div className="relative min-h-screen bg-background text-foreground overflow-hidden">
       {/* Toggle de tema */}
       <div className="fixed right-4 top-4 z-40">
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
-          onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-          className="rounded-full border border-border/60 hover:bg-muted"
-        >
-          {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-        </Button>
+        {mounted ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={resolvedTheme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
+            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+            className="rounded-full border border-border/60 hover:bg-muted"
+          >
+            {resolvedTheme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+          </Button>
+        ) : (
+          <div className="h-9 w-9" />
+        )}
       </div>
 
       {/* Fondo derecho con gradientes animados */}
